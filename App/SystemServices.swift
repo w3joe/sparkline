@@ -63,7 +63,7 @@ enum LoginItem {
 
     static var statusDescription: String? {
         switch SMAppService.mainApp.status {
-        case .requiresApproval: "Allow GB10 Power Monitor in System Settings → General → Login Items."
+        case .requiresApproval: "Allow Sparkline in System Settings → General → Login Items."
         case .notFound: "macOS can't find the app to register. Install it in /Applications first."
         default: nil
         }

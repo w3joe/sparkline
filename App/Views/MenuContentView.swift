@@ -56,7 +56,7 @@ struct MenuContentView: View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text("GB10 Power").font(.headline)
+                    Text("Sparkline").font(.headline)
                     if model.simulate {
                         Text("Simulation")
                             .font(.caption2.weight(.semibold))

@@ -30,7 +30,7 @@ struct GB10PowerMonitorApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("GB10 Power", id: WindowID.dashboard) {
+        Window("Sparkline", id: WindowID.dashboard) {
             DashboardView()
                 .environment(model)
         }

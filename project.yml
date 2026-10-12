@@ -40,11 +40,11 @@ targets:
     info:
       path: App/Info.plist
       properties:
-        CFBundleDisplayName: GB10 Power Monitor
-        CFBundleName: GB10 Power Monitor
+        CFBundleDisplayName: Sparkline
+        CFBundleName: Sparkline
         LSUIElement: true
         LSApplicationCategoryType: public.app-category.utilities
-        NSLocalNetworkUsageDescription: GB10 Power Monitor reads and switches your Tapo P110 plugs and connects to your DGX Sparks over SSH on your local network.
+        NSLocalNetworkUsageDescription: Sparkline reads and switches your Tapo P110 plugs and connects to your DGX Sparks over SSH on your local network.
         AppGroupIdentifier: $(APP_GROUP_ID)
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
@@ -56,7 +56,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.w3joe.GB10PowerMonitor
-        PRODUCT_NAME: GB10PowerMonitor
+        PRODUCT_NAME: Sparkline
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         COMBINE_HIDPI_IMAGES: YES
     preBuildScripts:
       - name: Build tapo-helper
@@ -78,7 +79,7 @@ targets:
     info:
       path: Widgets/Info.plist
       properties:
-        CFBundleDisplayName: GB10 Power
+        CFBundleDisplayName: Sparkline
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         NSExtension:

@@ -13,7 +13,7 @@ struct DashboardView: View {
             content.padding(20)
         }
         .frame(minWidth: 860, minHeight: 620)
-        .navigationTitle("GB10 Power")
+        .navigationTitle("Sparkline")
         .navigationSubtitle(model.config.monitoringEnabled ? "Monitoring" : "Monitoring paused")
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -48,7 +48,7 @@ struct DashboardView: View {
             }
             .fixedSize(horizontal: false, vertical: true)
             LinksSection()
-            PowerChartSection(range: range)
+            ChartsSection(range: range)
         }
     }
 }
@@ -88,6 +88,12 @@ struct SparkCard: View {
 
             WorkloadSection(probe: probe, activity: activity, checked: checked)
             TemperatureRow(reading: probe.thermal)
+            if let line = model.scheduleLine(id) {
+                Label(line, systemImage: "clock")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
 
             if !config.hasPlug {
                 Text("No plug address set.").font(.callout).foregroundStyle(.secondary)
@@ -319,9 +325,24 @@ struct Metric: View {
     }
 }
 
-struct PowerChartSection: View {
+private enum ChartKind: String, CaseIterable, Identifiable {
+    case power, temperature
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .power: "Power"
+        case .temperature: "Temperature"
+        }
+    }
+}
+
+struct ChartsSection: View {
     @Environment(AppModel.self) private var model
     let range: ChartRange
+    @State private var kind: ChartKind = .power
+    @State private var sensor: ThermalSensor = .gpu
     @State private var points: [ChartPoint] = []
     @State private var selected: Date?
 
@@ -345,36 +366,56 @@ struct PowerChartSection: View {
     }
 
     private var seriesKeys: [ChartSeriesKey] {
-        sparks.map(ChartSeriesKey.spark) + (sparks.count > 1 ? [.total] : [])
+        let machines = sparks.map(ChartSeriesKey.spark)
+        return kind == .power && sparks.count > 1 ? machines + [.total] : machines
     }
 
     private var rangeDescription: String {
         switch range {
-        case .hour: "Last hour, 10-second readings"
-        case .day: "Last 24 hours, 1-minute averages"
-        case .week: "Last 7 days, 15-minute averages"
-        case .month: "Last 30 days, hourly averages"
+        case .hour: "Last hour"
+        case .day: "Last 24 hours"
+        case .week: "Last 7 days"
+        case .month: "Last 30 days"
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(title: "Power", symbol: "chart.xyaxis.line", subtitle: rangeDescription)
+            HStack(alignment: .center, spacing: 12) {
+                Picker("Chart", selection: $kind) {
+                    ForEach(ChartKind.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 280)
+                Spacer(minLength: 12)
+                if kind == .temperature {
+                    Picker("Sensor", selection: $sensor) {
+                        ForEach(ThermalSensor.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 280)
+                }
+            }
+            Text(kind == .temperature ? "\(sensor.title) · \(rangeDescription)" : rangeDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             if points.isEmpty {
                 ContentUnavailableView(
                     "No Readings Yet",
-                    systemImage: "chart.xyaxis.line",
-                    description: Text("Readings appear once the plugs answer. History is kept for 30 days.")
+                    systemImage: kind == .power ? "chart.xyaxis.line" : "thermometer.medium",
+                    description: Text(kind == .power
+                        ? "Readings appear once the plugs answer. History is kept for 30 days."
+                        : "Temperature history starts from the next reading and is kept for 30 days.")
                 )
-                .frame(maxWidth: .infinity, minHeight: 300)
+                .frame(maxWidth: .infinity, minHeight: 260)
             } else {
                 chart
                 stats
             }
         }
         .card()
-        .task(id: "\(range.rawValue)-\(model.historyRevision / 2)") {
+        .task(id: "\(range.rawValue)-\(kind.rawValue)-\(sensor.rawValue)-\(model.historyRevision)") {
             load()
         }
     }
@@ -394,7 +435,7 @@ struct PowerChartSection: View {
             ForEach(points) { p in
                 LineMark(
                     x: .value("Time", p.date),
-                    y: .value("Watts", p.watts),
+                    y: .value(kind == .power ? "Watts" : "°C", p.watts),
                     series: .value("Line", p.lineID)
                 )
                 .foregroundStyle(by: .value("Series", name(p.series)))
@@ -416,7 +457,9 @@ struct PowerChartSection: View {
             AxisMarks { value in
                 AxisGridLine()
                 AxisValueLabel {
-                    if let watts = value.as(Double.self) { Text("\(Int(watts)) W") }
+                    if let number = value.as(Double.self) {
+                        Text(kind == .power ? "\(Int(number)) W" : "\(Int(number))°")
+                    }
                 }
             }
         }
@@ -438,7 +481,7 @@ struct PowerChartSection: View {
                         Circle().fill(color(key)).frame(width: 6, height: 6)
                         Text(name(key))
                         Spacer(minLength: 12)
-                        Text(Format.watts(p.watts)).monospacedDigit()
+                        Text(valueText(p.watts)).monospacedDigit()
                     }
                 }
             }
@@ -461,9 +504,11 @@ struct PowerChartSection: View {
                         Text(name(key)).font(.callout.weight(.semibold))
                     }
                     HStack(spacing: 18) {
-                        Metric(title: "Average", value: Format.watts(average))
-                        Metric(title: "Peak", value: Format.watts(series.map(\.max).max()))
-                        Metric(title: "Energy", value: Format.energy(ChartSeriesBuilder.energyWh(series, bucket: range.bucket)))
+                        Metric(title: "Average", value: valueText(average))
+                        Metric(title: "Peak", value: valueText(series.map(\.max).max()))
+                        if kind == .power {
+                            Metric(title: "Energy", value: Format.energy(ChartSeriesBuilder.energyWh(series, bucket: range.bucket)))
+                        }
                     }
                 }
                 .padding(10)
@@ -473,9 +518,21 @@ struct PowerChartSection: View {
         }
     }
 
+    private func valueText(_ value: Double?) -> String {
+        kind == .power ? Format.watts(value) : HealthFormat.celsius(value)
+    }
+
     private func load() {
         guard let store = model.store else { return }
-        let buckets = (try? store.buckets(for: range)) ?? []
-        points = ChartSeriesBuilder.points(from: buckets, bucket: range.bucket, sparks: sparks)
+        let buckets: [BucketValue]
+        let includeTotal: Bool
+        if kind == .temperature {
+            buckets = (try? store.temperatureBuckets(sensor: sensor, range: range)) ?? []
+            includeTotal = false
+        } else {
+            buckets = (try? store.buckets(for: range)) ?? []
+            includeTotal = true
+        }
+        points = ChartSeriesBuilder.points(from: buckets, bucket: range.bucket, sparks: sparks, includeTotal: includeTotal)
     }
 }

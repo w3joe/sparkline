@@ -23,9 +23,9 @@ public enum CommandBusError: Error, LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .appNotRunning:
-            "GB10 Power Monitor isn't running, so nothing was done."
+            "Sparkline isn't running, so nothing was done."
         case .unknownOutcome:
-            "GB10 Power Monitor took the command but didn't confirm it. Check the app."
+            "Sparkline took the command but didn't confirm it. Check the app."
         case .rejected(let message):
             message
         }

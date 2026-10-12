@@ -12,6 +12,7 @@ public struct SparkConfig: Codable, Sendable, Equatable, Identifiable {
     public var offThresholdWatts: Double
     /// How long to wait for a requested shutdown to finish before giving up with the outlet on.
     public var shutdownTimeout: TimeInterval
+    public var schedule: QuietHours
 
     public init(
         id: SparkID,
@@ -21,7 +22,8 @@ public struct SparkConfig: Codable, Sendable, Equatable, Identifiable {
         sshUser: String = "",
         sshPort: Int = 22,
         offThresholdWatts: Double = 5,
-        shutdownTimeout: TimeInterval = 300
+        shutdownTimeout: TimeInterval = 300,
+        schedule: QuietHours = QuietHours()
     ) {
         self.id = id
         self.name = name ?? id.defaultName
@@ -31,6 +33,37 @@ public struct SparkConfig: Codable, Sendable, Equatable, Identifiable {
         self.sshPort = sshPort
         self.offThresholdWatts = offThresholdWatts
         self.shutdownTimeout = shutdownTimeout
+        self.schedule = schedule
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, plugIP, sshHost, sshUser, sshPort, offThresholdWatts, shutdownTimeout, schedule
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(SparkID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        plugIP = try container.decode(String.self, forKey: .plugIP)
+        sshHost = try container.decode(String.self, forKey: .sshHost)
+        sshUser = try container.decode(String.self, forKey: .sshUser)
+        sshPort = try container.decode(Int.self, forKey: .sshPort)
+        offThresholdWatts = try container.decode(Double.self, forKey: .offThresholdWatts)
+        shutdownTimeout = try container.decode(TimeInterval.self, forKey: .shutdownTimeout)
+        schedule = try container.decodeIfPresent(QuietHours.self, forKey: .schedule) ?? QuietHours()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(plugIP, forKey: .plugIP)
+        try container.encode(sshHost, forKey: .sshHost)
+        try container.encode(sshUser, forKey: .sshUser)
+        try container.encode(sshPort, forKey: .sshPort)
+        try container.encode(offThresholdWatts, forKey: .offThresholdWatts)
+        try container.encode(shutdownTimeout, forKey: .shutdownTimeout)
+        try container.encode(schedule, forKey: .schedule)
     }
 
     public var hasPlug: Bool { !plugIP.trimmingCharacters(in: .whitespaces).isEmpty }

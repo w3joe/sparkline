@@ -17,7 +17,7 @@ struct SparkPowerWidget: Widget {
                 .containerBackground(.fill.tertiary, for: .widget)
                 .id(entry.snapshot?.generatedAt)
         }
-        .configurationDisplayName("GB10 Power")
+        .configurationDisplayName("Sparkline")
         .description("Live power, GPU work, and controls for your DGX Sparks.")
         .supportedFamilies(WidgetKind.families)
     }
@@ -31,7 +31,7 @@ struct SparkPowerSquareWidget: Widget {
                 .containerBackground(.fill.tertiary, for: .widget)
                 .id(entry.snapshot?.generatedAt)
         }
-        .configurationDisplayName("GB10 Power")
+        .configurationDisplayName("Sparkline")
         .description("Live power, GPU work, and controls for your DGX Sparks.")
         .supportedFamilies(WidgetKind.families)
     }

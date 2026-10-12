@@ -55,7 +55,7 @@ public struct CredentialStore: Sendable {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: credentials.username,
-            kSecAttrLabel as String: "GB10 Power Monitor – Tapo account",
+            kSecAttrLabel as String: "Sparkline – Tapo account",
             kSecValueData as String: Data(credentials.password.utf8),
         ]
         let status = SecItemAdd(attributes as CFDictionary, nil)

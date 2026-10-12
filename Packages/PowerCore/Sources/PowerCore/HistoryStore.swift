@@ -19,6 +19,41 @@ public struct PowerSample: Sendable, Equatable {
     }
 }
 
+public struct ThermalSample: Sendable, Equatable {
+    public var spark: SparkID
+    public var date: Date
+    public var gpuC: Double?
+    public var ssdC: Double?
+    public var nicC: Double?
+    public var boardC: Double?
+
+    public init(spark: SparkID, date: Date, gpuC: Double?, ssdC: Double?, nicC: Double?, boardC: Double?) {
+        self.spark = spark
+        self.date = date
+        self.gpuC = gpuC
+        self.ssdC = ssdC
+        self.nicC = nicC
+        self.boardC = boardC
+    }
+
+    public func celsius(_ sensor: ThermalSensor) -> Double? {
+        switch sensor {
+        case .gpu: gpuC
+        case .ssd: ssdC
+        case .nic: nicC
+        case .board: boardC
+        }
+    }
+
+    public var hasReading: Bool { !readings.isEmpty }
+
+    var readings: [(ThermalSensor, Double)] {
+        ThermalSensor.allCases.compactMap { sensor in
+            celsius(sensor).map { (sensor, $0) }
+        }
+    }
+}
+
 /// Raw 10-second samples for the last day plus per-minute summaries for 30 days, in SQLite.
 public final class HistoryStore: Sendable {
     public static let rawRetention: TimeInterval = 24 * 3_600
@@ -72,6 +107,31 @@ public final class HistoryStore: Sendable {
                 CREATE INDEX minuteSummary_minute ON minuteSummary(minute);
                 """)
         }
+        migrator.registerMigration("v2-temperature") { db in
+            try db.execute(sql: """
+                CREATE TABLE thermalSample (
+                    spark TEXT NOT NULL,
+                    ts REAL NOT NULL,
+                    gpu REAL,
+                    ssd REAL,
+                    nic REAL,
+                    board REAL,
+                    PRIMARY KEY (spark, ts)
+                );
+                CREATE INDEX thermalSample_ts ON thermalSample(ts);
+                CREATE TABLE thermalMinute (
+                    spark TEXT NOT NULL,
+                    minute INTEGER NOT NULL,
+                    sensor TEXT NOT NULL,
+                    avgC REAL NOT NULL,
+                    minC REAL NOT NULL,
+                    maxC REAL NOT NULL,
+                    n INTEGER NOT NULL,
+                    PRIMARY KEY (spark, minute, sensor)
+                );
+                CREATE INDEX thermalMinute_minute ON thermalMinute(minute);
+                """)
+        }
         return migrator
     }
 
@@ -111,7 +171,89 @@ public final class HistoryStore: Sendable {
                 sql: "DELETE FROM minuteSummary WHERE minute < ?",
                 arguments: [Int(now.addingTimeInterval(-Self.summaryRetention).timeIntervalSince1970)]
             )
-            return (samples, db.changesCount)
+            let minutes = db.changesCount
+            try db.execute(
+                sql: "DELETE FROM thermalSample WHERE ts < ?",
+                arguments: [now.addingTimeInterval(-Self.rawRetention).timeIntervalSince1970]
+            )
+            try db.execute(
+                sql: "DELETE FROM thermalMinute WHERE minute < ?",
+                arguments: [Int(now.addingTimeInterval(-Self.summaryRetention).timeIntervalSince1970)]
+            )
+            return (samples, minutes)
+        }
+    }
+
+    /// Stores a temperature reading and folds each present sensor into that minute's summary.
+    public func record(_ sample: ThermalSample) throws {
+        let readings = sample.readings
+        guard !readings.isEmpty else { return }
+        try db.write { db in
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO thermalSample (spark, ts, gpu, ssd, nic, board) VALUES (?, ?, ?, ?, ?, ?)",
+                arguments: [
+                    sample.spark.rawValue, sample.date.timeIntervalSince1970,
+                    sample.gpuC, sample.ssdC, sample.nicC, sample.boardC,
+                ]
+            )
+            let minute = Int((sample.date.timeIntervalSince1970 / 60).rounded(.down)) * 60
+            for (sensor, celsius) in readings {
+                try db.execute(
+                    sql: """
+                        INSERT INTO thermalMinute (spark, minute, sensor, avgC, minC, maxC, n) VALUES (?, ?, ?, ?, ?, ?, 1)
+                        ON CONFLICT(spark, minute, sensor) DO UPDATE SET
+                            avgC = (avgC * n + excluded.avgC) / (n + 1),
+                            minC = MIN(minC, excluded.minC),
+                            maxC = MAX(maxC, excluded.maxC),
+                            n = n + 1
+                        """,
+                    arguments: [sample.spark.rawValue, minute, sensor.rawValue, celsius, celsius, celsius]
+                )
+            }
+        }
+    }
+
+    public func temperatureBuckets(sensor: ThermalSensor, range: ChartRange, now: Date = Date()) throws -> [BucketValue] {
+        let since = now.addingTimeInterval(-range.duration).timeIntervalSince1970
+        let bucket = Int(range.bucket)
+        let column = sensor.rawValue
+        let sql: String
+        switch range {
+        case .hour:
+            sql = """
+                SELECT spark, CAST(ts / \(bucket) AS INTEGER) * \(bucket) AS b,
+                       AVG(\(column)), MIN(\(column)), MAX(\(column))
+                FROM thermalSample WHERE \(column) IS NOT NULL AND ts >= ?
+                GROUP BY spark, b ORDER BY b
+                """
+        case .day:
+            sql = """
+                SELECT spark, minute, avgC, minC, maxC
+                FROM thermalMinute WHERE sensor = ? AND minute >= ? ORDER BY minute
+                """
+        case .week, .month:
+            sql = """
+                SELECT spark, (minute / \(bucket)) * \(bucket) AS b,
+                       SUM(avgC * n) / SUM(n), MIN(minC), MAX(maxC)
+                FROM thermalMinute WHERE sensor = ? AND minute >= ?
+                GROUP BY spark, b ORDER BY b
+                """
+        }
+        return try db.read { db in
+            let rows: [Row]
+            if range == .hour {
+                rows = try Row.fetchAll(db, sql: sql, arguments: [since])
+            } else {
+                rows = try Row.fetchAll(db, sql: sql, arguments: [sensor.rawValue, Int(since)])
+            }
+            return rows.compactMap { row in
+                guard let spark = SparkID(rawValue: row[0]) else { return nil }
+                return BucketValue(
+                    spark: spark,
+                    start: Date(timeIntervalSince1970: row[1]),
+                    avg: row[2], min: row[3], max: row[4]
+                )
+            }
         }
     }
 

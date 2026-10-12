@@ -14,11 +14,11 @@ struct WidgetView: View {
                 content(snapshot)
             } else {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("GB10 Power", systemImage: "bolt.fill")
+                    Label("Sparkline", systemImage: "bolt.fill")
                         .font(.headline)
                         .widgetAccentable()
                     Spacer()
-                    Text("Open GB10 Power Monitor to start monitoring.")
+                    Text("Open Sparkline to start monitoring.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -53,18 +53,19 @@ private struct SingleSparkLarge: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SparkHeader(spark: spark, showsActivity: true)
+            SparkHeader(spark: spark)
             Watts(watts: spark.watts, size: 44)
             Text(spark.runningSummary)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
 
-            HStack(spacing: 8) {
+            HStack(spacing: 16) {
                 MiniStat(title: "GPU", value: WidgetFormat.percent(spark.gpuUtilization))
                 MiniStat(title: "Temp", value: WidgetFormat.celsius(spark.gpuCelsius))
                 MiniStat(title: "GPU draw", value: WidgetFormat.watts(spark.gpuWatts))
                 MiniStat(title: "Outlet", value: spark.outlet == .on ? "On" : spark.outlet == .off ? "Off" : "–")
+                Spacer(minLength: 0)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -94,54 +95,57 @@ private struct BothSparksLarge: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
-                Label("GB10 Power", systemImage: "bolt.fill")
+                Label("Sparkline", systemImage: "bolt.fill")
                     .font(.headline)
                     .widgetAccentable()
                 Spacer()
-                Watts(watts: total, size: 26)
+                Watts(watts: total, size: 28)
             }
-            VStack(spacing: 8) {
-                ForEach(sparks) { spark in
-                    LargeSparkTile(spark: spark, entry: entry, snapshot: snapshot)
+            .padding(.bottom, 10)
+
+            ForEach(Array(sparks.enumerated()), id: \.element.id) { index, spark in
+                if index > 0 {
+                    Divider().padding(.vertical, 10)
                 }
+                SparkListRow(spark: spark, entry: entry)
             }
-            Spacer(minLength: 0)
+
+            Spacer(minLength: 8)
             FooterLine(entry: entry, snapshot: snapshot)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
-private struct LargeSparkTile: View {
+private struct SparkListRow: View {
     let spark: SparkSnapshot
     let entry: Entry
-    let snapshot: WidgetSnapshot
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                SparkHeader(spark: spark, showsActivity: true)
-                Spacer(minLength: 4)
-                Watts(watts: spark.watts, size: 24)
-            }
-            HStack(spacing: 10) {
-                MiniStat(title: "GPU", value: WidgetFormat.percent(spark.gpuUtilization))
-                MiniStat(title: "Temp", value: WidgetFormat.celsius(spark.gpuCelsius))
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    StatusSymbol(status: spark.computer)
+                    Text(spark.name)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                }
                 Text(spark.runningSummary)
-                    .font(.caption)
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                Spacer(minLength: 0)
+                Text("GPU \(WidgetFormat.percent(spark.gpuUtilization))  ·  \(WidgetFormat.celsius(spark.gpuCelsius))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
-            Sparkline(points: spark.sparkline, showsAxis: false)
-                .frame(height: 28)
-            PrimaryAction(spark: spark, entry: entry)
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 8) {
+                Watts(watts: spark.watts, size: 22)
+                PrimaryAction(spark: spark, entry: entry, fillsWidth: false)
+            }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -153,7 +157,7 @@ private struct SingleSparkMedium: View {
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-                SparkHeader(spark: spark, showsActivity: true)
+                SparkHeader(spark: spark)
                 Watts(watts: spark.watts, size: 32)
                 Text(spark.runningSummary)
                     .font(.caption.weight(.medium))
@@ -184,7 +188,7 @@ private struct BothSparksMedium: View {
             ForEach(Array(sparks.enumerated()), id: \.element.id) { index, spark in
                 if index > 0 { Divider() }
                 VStack(alignment: .leading, spacing: 4) {
-                    SparkHeader(spark: spark, showsActivity: true)
+                    SparkHeader(spark: spark)
                     Watts(watts: spark.watts, size: 26)
                     Text(spark.runningSummary)
                         .font(.caption)
@@ -210,7 +214,6 @@ private struct BothSparksMedium: View {
 
 private struct SparkHeader: View {
     let spark: SparkSnapshot
-    var showsActivity = false
 
     var body: some View {
         HStack(spacing: 5) {
@@ -218,14 +221,6 @@ private struct SparkHeader: View {
             Text(spark.name)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
-            if showsActivity {
-                Text(spark.activity.label)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(spark.activity.widgetColor)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(spark.activity.widgetColor.opacity(0.16), in: Capsule())
-            }
         }
     }
 }
@@ -242,7 +237,6 @@ private struct MiniStat: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -334,6 +328,7 @@ private struct FooterLine: View {
 private struct PrimaryAction: View {
     let spark: SparkSnapshot
     let entry: Entry
+    var fillsWidth = true
 
     var body: some View {
         Group {
@@ -342,7 +337,7 @@ private struct PrimaryAction: View {
             } else if entry.isArmed(spark.id) {
                 HStack(spacing: 4) {
                     Button(intent: ConfirmShutdownIntent(spark.id)) {
-                        Text("Confirm").frame(maxWidth: .infinity)
+                        Text("Confirm").frame(maxWidth: fillsWidth ? .infinity : nil)
                     }
                     .tint(.red)
                     Button(intent: CancelShutdownIntent(spark.id)) {
@@ -352,12 +347,12 @@ private struct PrimaryAction: View {
                 }
             } else if spark.outlet == .off {
                 Button(intent: SwitchOnIntent(spark.id)) {
-                    Label("Turn On", systemImage: "bolt.fill").frame(maxWidth: .infinity)
+                    label("Turn On", "bolt.fill")
                 }
                 .tint(.accentColor)
             } else {
                 Button(intent: ArmShutdownIntent(spark.id)) {
-                    Label("Shut Down", systemImage: "power").frame(maxWidth: .infinity)
+                    label("Shut Down", "power")
                 }
             }
         }
@@ -365,6 +360,15 @@ private struct PrimaryAction: View {
         .buttonStyle(.bordered)
         .buttonBorderShape(.capsule)
         .controlSize(.small)
+    }
+
+    @ViewBuilder
+    private func label(_ title: String, _ symbol: String) -> some View {
+        if fillsWidth {
+            Label(title, systemImage: symbol).frame(maxWidth: .infinity)
+        } else {
+            Label(title, systemImage: symbol)
+        }
     }
 }
 
@@ -389,7 +393,7 @@ struct Sparkline: View {
         Chart(segments, id: \.date) { item in
             AreaMark(x: .value("Time", item.date), y: .value("W", item.watts), series: .value("Segment", item.segment))
                 .interpolationMethod(.monotone)
-                .foregroundStyle(.linearGradient(colors: [.accentColor.opacity(0.3), .accentColor.opacity(0.02)],
+                .foregroundStyle(.linearGradient(colors: [.accentColor.opacity(0.18), .accentColor.opacity(0.02)],
                                                  startPoint: .top, endPoint: .bottom))
             LineMark(x: .value("Time", item.date), y: .value("W", item.watts), series: .value("Segment", item.segment))
                 .interpolationMethod(.monotone)
@@ -461,12 +465,3 @@ extension ComputerStatus {
     }
 }
 
-extension WorkActivity {
-    var widgetColor: Color {
-        switch self {
-        case .busy: .blue
-        case .loaded: .teal
-        case .idle: .secondary
-        }
-    }
-}

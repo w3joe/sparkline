@@ -8,12 +8,13 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             Tab("General", systemImage: "gearshape") { GeneralSettings() }
+            Tab("Schedule", systemImage: "clock") { ScheduleSettings() }
             Tab("Tapo Account", systemImage: "person.crop.circle") { TapoSettings() }
             ForEach(SparkID.allCases) { id in
                 Tab(model.config.spark(id).name, systemImage: "cpu") { SparkSettings(id: id) }
             }
         }
-        .frame(width: 600, height: 580)
+        .frame(width: 600, height: 640)
     }
 }
 
@@ -136,6 +137,88 @@ struct PlugTestResult: View {
             } icon: {
                 Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
             }
+        }
+    }
+}
+
+struct ScheduleSettings: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Form {
+            ForEach(SparkID.allCases) { id in
+                ScheduleSparkSection(id: id)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+struct ScheduleSparkSection: View {
+    @Environment(AppModel.self) private var model
+    let id: SparkID
+
+    private var hours: QuietHours { model.config.spark(id).schedule }
+
+    var body: some View {
+        Section {
+            Toggle("Shut down when idle", isOn: binding(\.enabled))
+            DatePicker("From", selection: timeBinding(\.startMinutes), displayedComponents: .hourAndMinute)
+            DatePicker("Until", selection: timeBinding(\.endMinutes), displayedComponents: .hourAndMinute)
+            Toggle(isOn: binding(\.stayOff)) {
+                Text("Keep off until turned on")
+                Text("After the window ends, leave it off. It comes on only when you turn it on.")
+            }
+            Stepper(value: binding(\.idleMinutes), in: 1...180) {
+                LabeledContent("Idle for", value: "\(hours.idleMinutes) min")
+            }
+            if hours.startMinutes == hours.endMinutes {
+                Text("Choose a different start and end. A window can run past midnight.")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            }
+            if let line = model.scheduleLine(id) {
+                LabeledContent("Now", value: line)
+            }
+            if let until = hours.holdUntil, until > Date() {
+                LabeledContent("Kept on until \(Format.time(until))") {
+                    Button("Allow Schedule") { model.clearScheduleHold(id) }
+                }
+            }
+        } header: {
+            Text(model.config.spark(id).name)
+        } footer: {
+            Text(hours.stayOff
+                 ? "When the window ends, the Spark stays off until you turn it on. A GPU job or container still keeps it from shutting down. The outlet is switched off only after an SSH shutdown is confirmed."
+                 : "When the window ends, the Spark is turned on. A GPU job or container keeps it from shutting down. Turning it on during the window keeps it on until the window ends. The outlet is switched off only after an SSH shutdown is confirmed.")
+        }
+    }
+
+    private func binding(_ keyPath: WritableKeyPath<QuietHours, Bool>) -> Binding<Bool> {
+        Binding(get: { hours[keyPath: keyPath] }, set: { new in
+            var next = hours
+            next[keyPath: keyPath] = new
+            model.saveSchedule(id, next)
+        })
+    }
+
+    private func binding(_ keyPath: WritableKeyPath<QuietHours, Int>) -> Binding<Int> {
+        Binding(get: { hours[keyPath: keyPath] }, set: { new in
+            var next = hours
+            next[keyPath: keyPath] = new
+            model.saveSchedule(id, next)
+        })
+    }
+
+    private func timeBinding(_ keyPath: WritableKeyPath<QuietHours, Int>) -> Binding<Date> {
+        Binding {
+            let minutes = hours[keyPath: keyPath]
+            return Calendar.current.date(from: DateComponents(hour: minutes / 60, minute: minutes % 60)) ?? Date()
+        } set: { date in
+            let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+            var next = hours
+            next[keyPath: keyPath] = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+            model.saveSchedule(id, next)
         }
     }
 }

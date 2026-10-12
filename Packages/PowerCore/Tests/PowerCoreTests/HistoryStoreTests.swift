@@ -77,6 +77,25 @@ struct HistoryStoreTests {
         #expect(abs((buckets.first?.avg ?? 0) - 360.0 / 7) < 0.001)
     }
 
+    @Test func temperatureHistoryKeepsEachSensorSeparate() throws {
+        let store = try HistoryStore.inMemory()
+        let minute = Date(timeIntervalSince1970: (now.timeIntervalSince1970 / 60).rounded(.down) * 60)
+        try store.record(ThermalSample(spark: .a, date: minute, gpuC: 40, ssdC: 50, nicC: nil, boardC: 60))
+        try store.record(ThermalSample(spark: .a, date: minute + 15, gpuC: 50, ssdC: 52, nicC: nil, boardC: 70))
+        try store.record(ThermalSample(spark: .b, date: minute, gpuC: 80, ssdC: nil, nicC: nil, boardC: nil))
+
+        let gpu = try store.temperatureBuckets(sensor: .gpu, range: .day, now: minute + 40)
+        #expect(gpu.map(\.spark) == [.a, .b] || gpu.map(\.spark) == [.b, .a])
+        let sparkA = try #require(gpu.first { $0.spark == .a })
+        #expect(abs(sparkA.avg - 45) < 0.001)
+        #expect(sparkA.min == 40)
+        #expect(sparkA.max == 50)
+        #expect(try store.temperatureBuckets(sensor: .nic, range: .day, now: minute + 40).isEmpty)
+
+        let hour = try store.temperatureBuckets(sensor: .ssd, range: .hour, now: minute + 40)
+        #expect(hour.map(\.avg).sorted() == [50, 52])
+    }
+
     @Test func persistsAcrossReopen() throws {
         let url = FileManager.default.temporaryDirectory.appending(path: "gb10-\(UUID().uuidString)/history.sqlite")
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

@@ -32,6 +32,7 @@ final class AppModel {
     let health: HealthMonitor
     /// Bumped when link or temperature readings change.
     var healthRevision = 0
+    var scheduleDecisions: [SparkID: ScheduleDecision] = [:]
 
     @ObservationIgnored private let configStore: ConfigStore
     @ObservationIgnored private let credentialStore = CredentialStore()
@@ -46,6 +47,10 @@ final class AppModel {
     @ObservationIgnored private var publishScheduled = false
     @ObservationIgnored private var lastWidgetSignature = ""
     @ObservationIgnored private var lastWidgetReload = Date.distantPast
+    @ObservationIgnored private var idleSince: [SparkID: Date] = [:]
+    @ObservationIgnored private var scheduleRetryAfter: [SparkID: Date] = [:]
+    @ObservationIgnored private var automaticShutdown: Set<SparkID> = []
+    @ObservationIgnored private var automaticWake: Set<SparkID> = []
 
     init() {
         simulate = CommandLine.arguments.contains("--simulate")
@@ -83,7 +88,9 @@ final class AppModel {
         self.health = health
         health.onChange = { [weak self] in
             self?.healthRevision &+= 1
+            self?.recordTemperatures()
             self?.schedulePublish()
+            self?.evaluateSchedules()
         }
 
         monitor = Monitor(plug: helper, probe: probe, store: store) { [weak self] state in
@@ -124,6 +131,12 @@ final class AppModel {
                 try? await Task.sleep(for: .seconds(3_600))
             }
         }
+        Task { [weak self] in
+            while let self, !Task.isCancelled {
+                self.evaluateSchedules()
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
 
         Task {
             if let credentials = currentCredentials() {
@@ -160,6 +173,28 @@ final class AppModel {
         Task { await monitor.networkRecovered() }
     }
 
+    private func recordTemperatures() {
+        guard let store else { return }
+        let now = Date()
+        var wrote = false
+        for id in SparkID.allCases {
+            let thermal = health.probe(id).thermal
+            guard thermal.error == nil else { continue }
+            let sample = ThermalSample(
+                spark: id, date: now,
+                gpuC: thermal.gpuC, ssdC: thermal.ssdC, nicC: thermal.nicC, boardC: thermal.boardC
+            )
+            guard sample.hasReading else { continue }
+            do {
+                try store.record(sample)
+                wrote = true
+            } catch {
+                storeError = "Couldn't save temperatures: \(error.localizedDescription)"
+            }
+        }
+        if wrote { historyRevision &+= 1 }
+    }
+
     private func pruneHistory() {
         do {
             try store?.prune()
@@ -174,6 +209,7 @@ final class AppModel {
         states[state.id] = state
         historyRevision &+= 1
         schedulePublish()
+        evaluateSchedules()
     }
 
     func state(_ id: SparkID) -> SparkLiveState {
@@ -203,6 +239,110 @@ final class AppModel {
     func updateSpark(_ spark: SparkConfig) {
         config.update(spark)
         applyMonitoring()
+    }
+
+    func saveSchedule(_ id: SparkID, _ schedule: QuietHours, evaluate: Bool = true) {
+        var spark = config.spark(id)
+        var schedule = schedule
+        schedule.idleMinutes = min(180, max(1, schedule.idleMinutes))
+        schedule.startMinutes = min(23 * 60 + 59, max(0, schedule.startMinutes))
+        schedule.endMinutes = min(23 * 60 + 59, max(0, schedule.endMinutes))
+        spark.schedule = schedule
+        config.update(spark)
+        configStore.save(config)
+        if evaluate { evaluateSchedules() }
+    }
+
+    func clearScheduleHold(_ id: SparkID) {
+        var schedule = config.spark(id).schedule
+        schedule.holdUntil = nil
+        idleSince[id] = nil
+        saveSchedule(id, schedule)
+    }
+
+    func scheduleLine(_ id: SparkID) -> String? {
+        guard config.spark(id).schedule.enabled else { return nil }
+        switch scheduleDecisions[id] {
+        case .outsideWindow:
+            let outletOff = state(id).outlet != .on
+            return config.spark(id).schedule.stayOff && outletOff ? "Off until you turn it on" : "Outside the quiet hours"
+        case .off: return "Off until you turn it on"
+        case .held(let until): return "Kept on until \(Format.time(until))"
+        case .workload(let name): return "Waiting — \(name) is running"
+        case .waiting(let idle, let required): return "Idle for \(Int(idle / 60)) of \(Int(required / 60)) min"
+        case .unknownWorkload: return "Waiting for a workload reading"
+        case .retryAfter(let date): return "Couldn't shut down. Trying again at \(Format.time(date))"
+        case .turnOn: return "Turning on"
+        case .inProgress, .shutDown, .inactive, nil: return nil
+        }
+    }
+
+    private func holdScheduleIfNeeded(_ id: SparkID) {
+        var schedule = config.spark(id).schedule
+        guard let end = schedule.windowEnd(containing: Date()) else { return }
+        schedule.holdUntil = end
+        idleSince[id] = nil
+        saveSchedule(id, schedule)
+    }
+
+    private func evaluateSchedules() {
+        guard config.monitoringEnabled else {
+            scheduleDecisions = [:]
+            return
+        }
+        let now = Date()
+        for id in SparkID.allCases {
+            var schedule = config.spark(id).schedule
+            if let hold = schedule.holdUntil, hold <= now {
+                schedule.holdUntil = nil
+                saveSchedule(id, schedule, evaluate: false)
+            }
+            let state = state(id)
+            let probe = health.probe(id)
+            let known = health.updatedAt != nil && probe.reachable && probe.thermal.gpuC != nil
+            let running = known && probe.workload.activity != .idle
+            let held = (schedule.holdUntil ?? .distantPast) > now
+            if schedule.stayOff {
+                if schedule.pendingWake {
+                    schedule.pendingWake = false
+                    saveSchedule(id, schedule, evaluate: false)
+                }
+            } else if schedule.enabled && schedule.contains(now) && state.outlet != .on && !schedule.pendingWake {
+                schedule.pendingWake = true
+                saveSchedule(id, schedule, evaluate: false)
+            }
+            let blocked = !schedule.enabled || !schedule.contains(now) || state.outlet != .on
+                || isBusy(id) || held || !known || running
+            if blocked {
+                idleSince[id] = nil
+            } else if idleSince[id] == nil {
+                idleSince[id] = now
+            }
+            let decision = QuietHoursEvaluator.decide(
+                schedule,
+                ScheduleSnapshot(
+                    now: now,
+                    outletOn: state.outlet == .on,
+                    operationInProgress: isBusy(id),
+                    workloadKnown: known,
+                    workloadRunning: running,
+                    workloadName: probe.workload.processes.first?.name ?? probe.workload.containers.first?.name,
+                    idleSince: idleSince[id],
+                    retryAfter: scheduleRetryAfter[id],
+                    pendingWake: schedule.pendingWake
+                )
+            )
+            scheduleDecisions[id] = decision
+            switch decision {
+            case .shutDown:
+                idleSince[id] = nil
+                shutDown(id, automatic: true)
+            case .turnOn:
+                switchOn(id, automatic: true)
+            default:
+                break
+            }
+        }
     }
 
     /// Saves the Tapo account and checks it against each configured plug.
@@ -254,20 +394,41 @@ final class AppModel {
         }
     }
 
-    func switchOn(_ id: SparkID) {
+    func switchOn(_ id: SparkID, automatic: Bool = false) {
+        if automatic {
+            guard operations[id] == nil else { return }
+            automaticWake.insert(id)
+        }
         run(id, overlay: nil, initial: "Switching on…") { controller, config, progress in
             await controller.switchOn(config, progress: progress)
         } completion: { [weak self] outcome, config in
-            guard let self, outcome.success else { return }
+            guard let self else { return }
+            let wasAutomatic = self.automaticWake.remove(id) != nil
+            guard outcome.success else {
+                if wasAutomatic { self.scheduleRetryAfter[id] = Date().addingTimeInterval(10 * 60) }
+                return
+            }
             await self.monitor.noteSwitchedOn(id)
             if self.simulate { self.lab.markUp(config.sshHost) }
+            self.clearPendingWake(id)
+            if !wasAutomatic { self.holdScheduleIfNeeded(id) }
         }
     }
 
-    func shutDown(_ id: SparkID) {
-        run(id, overlay: .shuttingDown, initial: "Shutting down…") { controller, config, progress in
+    private func clearPendingWake(_ id: SparkID) {
+        var schedule = config.spark(id).schedule
+        guard schedule.pendingWake else { return }
+        schedule.pendingWake = false
+        saveSchedule(id, schedule, evaluate: false)
+    }
+
+    func shutDown(_ id: SparkID, automatic: Bool = false) {
+        run(id, overlay: .shuttingDown, initial: "Shutting down…", automatic: automatic) { controller, config, progress in
             await controller.shutDown(config, progress: progress)
-        } completion: { _, _ in }
+        } completion: { [weak self] outcome, _ in
+            guard let self, self.automaticShutdown.remove(id) != nil else { return }
+            self.scheduleRetryAfter[id] = outcome.success ? nil : Date().addingTimeInterval(10 * 60)
+        }
     }
 
     func powerCycle(_ id: SparkID) {
@@ -277,6 +438,7 @@ final class AppModel {
             guard let self, outcome.success else { return }
             await self.monitor.noteSwitchedOn(id)
             if self.simulate { self.lab.markUp(config.sshHost) }
+            self.holdScheduleIfNeeded(id)
         }
     }
 
@@ -284,6 +446,7 @@ final class AppModel {
         _ id: SparkID,
         overlay: ComputerStatus?,
         initial: String,
+        automatic: Bool = false,
         _ body: @escaping @Sendable (PowerController, SparkConfig, @escaping @Sendable (ShutdownPhase) -> Void) async -> ActionOutcome,
         completion: @escaping @MainActor (ActionOutcome, SparkConfig) async -> Void
     ) {
@@ -291,6 +454,7 @@ final class AppModel {
             notice = ActionNotice(spark: id, message: "\(config.spark(id).name) already has an action in progress.", success: false)
             return
         }
+        if automatic { automaticShutdown.insert(id) }
         let token = UUID()
         operationTokens[id] = token
         operations[id] = initial

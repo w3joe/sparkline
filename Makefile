@@ -7,8 +7,8 @@ PROJECT := GB10PowerMonitor.xcodeproj
 SCHEME := GB10PowerMonitor
 DERIVED := $(CURDIR)/build
 CONFIG ?= Release
-APP := $(DERIVED)/Build/Products/$(CONFIG)/GB10PowerMonitor.app
-INSTALLED := /Applications/GB10PowerMonitor.app
+APP := $(DERIVED)/Build/Products/$(CONFIG)/Sparkline.app
+INSTALLED := /Applications/Sparkline.app
 HELPER := $(CARGO_TARGET_DIR)/aarch64-apple-darwin/release/tapo-helper
 
 .PHONY: bootstrap project helper build test test-helper test-core install run run-sim clean
@@ -39,7 +39,7 @@ test-core: helper
 
 install: build
 	-osascript -e 'tell application id "com.w3joe.GB10PowerMonitor" to quit' >/dev/null 2>&1
-	rm -rf "$(INSTALLED)"
+	rm -rf "$(INSTALLED)" /Applications/GB10PowerMonitor.app
 	ditto "$(APP)" "$(INSTALLED)"
 
 run: install

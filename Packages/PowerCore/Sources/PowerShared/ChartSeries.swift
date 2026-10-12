@@ -51,6 +51,21 @@ public struct BucketValue: Sendable, Equatable {
     }
 }
 
+public enum ThermalSensor: String, CaseIterable, Sendable, Identifiable {
+    case gpu, ssd, nic, board
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .gpu: "GPU"
+        case .ssd: "SSD"
+        case .nic: "NIC"
+        case .board: "Board"
+        }
+    }
+}
+
 public enum ChartSeriesKey: Hashable, Sendable {
     case spark(SparkID)
     case total
