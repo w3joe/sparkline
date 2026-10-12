@@ -1,0 +1,7 @@
+.DS_Store
+/build/
+/GB10PowerMonitor.xcodeproj/
+/tapo-helper/target/
+/Packages/PowerCore/.build/
+/Packages/PowerCore/.swiftpm/
+xcuserdata/
