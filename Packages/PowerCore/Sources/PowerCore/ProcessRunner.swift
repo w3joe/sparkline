@@ -8,6 +8,13 @@ public struct ProcessResult: Sendable, Equatable {
     public var timedOut: Bool
 
     public var succeeded: Bool { status == 0 && !timedOut }
+
+    public init(status: Int32, stdout: String, stderr: String, timedOut: Bool) {
+        self.status = status
+        self.stdout = stdout
+        self.stderr = stderr
+        self.timedOut = timedOut
+    }
 }
 
 public enum ProcessRunner {

@@ -46,6 +46,7 @@ struct DashboardView: View {
             HStack(alignment: .top, spacing: 16) {
                 ForEach(SparkID.allCases) { SparkCard(id: $0) }
             }
+            LinksSection()
             PowerChartSection(range: range)
         }
     }
@@ -74,6 +75,8 @@ struct SparkCard: View {
                 Metric(title: "Today", value: state.todayWh.map { Format.energy(Double($0)) } ?? "–")
                 Metric(title: "Updated", value: Format.time(state.lastReadingAt))
             }
+
+            TemperatureRow(reading: model.health.thermals[id])
 
             if !config.hasPlug {
                 Text("No plug address set.").font(.callout).foregroundStyle(.secondary)
@@ -105,6 +108,147 @@ struct SparkCard: View {
         case .off: "Off"
         case .unknown: "–"
         }
+    }
+}
+
+struct TemperatureRow: View {
+    let reading: ThermalReading?
+
+    var body: some View {
+        HStack(spacing: 16) {
+            TempMetric(title: "GPU", celsius: reading?.gpuC)
+            TempMetric(title: "SSD", celsius: reading?.ssdC)
+            TempMetric(title: "NIC", celsius: reading?.nicC)
+            TempMetric(title: "Board", celsius: reading?.boardC)
+        }
+        .help(reading?.error ?? "Live temperatures")
+    }
+}
+
+struct TempMetric: View {
+    let title: String
+    let celsius: Double?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(HealthFormat.celsius(celsius))
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(color)
+        }
+    }
+
+    private var color: Color {
+        guard let celsius else { return .primary }
+        switch TemperatureBand.band(celsius) {
+        case .normal: return .primary
+        case .warm: return .orange
+        case .hot: return .red
+        }
+    }
+}
+
+struct LinksSection: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let health = model.health
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Links").font(.title3.weight(.semibold))
+                Text(health.updatedAt.map { "Updated \(Format.time($0))" } ?? "Waiting for the first reading")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            if let error = health.error {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout).foregroundStyle(.orange).lineLimit(3)
+            }
+            LinkRow(kind: .tenGig)
+            LinkRow(kind: .qsfp)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.separator.opacity(0.6)))
+    }
+}
+
+struct LinkRow: View {
+    @Environment(AppModel.self) private var model
+    let kind: LinkKind
+
+    var body: some View {
+        let health = model.health
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(kind.title).font(.headline)
+                    Text(kind.detail).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                status
+            }
+            HStack(spacing: 22) {
+                metrics
+            }
+            if kind == .qsfp {
+                HStack(spacing: 16) {
+                    ForEach(HealthMonitor.qsfpPorts, id: \.self) { name in
+                        let one = health.spark1.port(name)
+                        let two = health.spark2.port(name)
+                        Text("\(name) \(portMark(one)) / \(portMark(two))")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            HStack {
+                if let result = health.speedResults[kind] {
+                    Text("Last test \(HealthFormat.gigabits(result.gigabitsPerSecond)) at \(Format.time(result.at))")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else if let failure = health.testError[kind] {
+                    Text(failure).font(.callout).foregroundStyle(.orange).lineLimit(2)
+                }
+                Spacer()
+                if health.testing == kind {
+                    ProgressView().controlSize(.small)
+                }
+                Button("Test Max Speed") { health.testSpeed(kind) }
+                    .disabled(health.testing != nil)
+            }
+        }
+        .padding(12)
+        .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        let up = kind == .tenGig ? model.health.tenGigUp : model.health.qsfpUp
+        Label(up ? "Up" : "Down", systemImage: up ? "checkmark.circle.fill" : "xmark.circle.fill")
+            .font(.caption.weight(.medium))
+            .foregroundStyle(up ? .green : .red)
+    }
+
+    @ViewBuilder
+    private var metrics: some View {
+        let health = model.health
+        switch kind {
+        case .tenGig:
+            Metric(title: "Speed", value: HealthFormat.megabits(health.localEthernet.megabitsPerSecond ?? health.spark1.port(HealthMonitor.tenGigPort)?.megabitsPerSecond))
+            Metric(title: "Ping", value: HealthFormat.ping(health.tenGigPing))
+            Metric(title: "Mac", value: health.localEthernet.address ?? "No address")
+            Metric(title: "Spark 1", value: HealthMonitor.sparkTenGigAddress)
+        case .qsfp:
+            let speed = HealthMonitor.qsfpPorts.compactMap { health.spark1.port($0)?.megabitsPerSecond }.max()
+            Metric(title: "Speed", value: HealthFormat.megabits(speed))
+            Metric(title: "Ping", value: HealthFormat.ping(health.spark1.pingMilliseconds))
+            Metric(title: "Path", value: "192.168.177.11 to .12")
+        }
+    }
+
+    private func portMark(_ port: PortReading?) -> String {
+        guard let port else { return "–" }
+        return port.up ? "up" : "down"
     }
 }
 

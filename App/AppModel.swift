@@ -29,6 +29,9 @@ final class AppModel {
     @ObservationIgnored let probe: any PortProbe
     @ObservationIgnored private(set) var monitor: Monitor!
     @ObservationIgnored private(set) var controller: PowerController!
+    let health: HealthMonitor
+    /// Bumped when link or temperature readings change.
+    var healthRevision = 0
 
     @ObservationIgnored private let configStore: ConfigStore
     @ObservationIgnored private let credentialStore = CredentialStore()
@@ -76,6 +79,10 @@ final class AppModel {
         }
         bus = container.map { CommandBus(container: $0) }
 
+        let health = HealthMonitor(enabled: !simulate, onChange: {})
+        self.health = health
+        health.onChange = { [weak self] in self?.healthRevision &+= 1 }
+
         monitor = Monitor(plug: helper, probe: probe, store: store) { [weak self] state in
             Task { @MainActor in self?.apply(state) }
         }
@@ -120,6 +127,7 @@ final class AppModel {
                 try? await helper.configure(credentials)
             }
             applyMonitoring()
+            health.start()
         }
     }
 
