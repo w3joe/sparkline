@@ -87,7 +87,7 @@ struct SSHTests {
         let args = env.sshArguments(testSpark(), command: "poweroff")
         #expect(args.contains("BatchMode=yes"))
         #expect(args.contains("StrictHostKeyChecking=yes"))
-        #expect(args.contains("UserKnownHostsFile=/tmp/gb10/known_hosts"))
+        #expect(args.contains("UserKnownHostsFile=\"/tmp/gb10/known_hosts\""))
         #expect(args.suffix(2) == ["joe@spark-a.local", "poweroff"])
     }
 

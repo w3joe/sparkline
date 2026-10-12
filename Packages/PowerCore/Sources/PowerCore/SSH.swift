@@ -129,7 +129,7 @@ public struct SSHEnvironment: Sendable {
             "-o", "BatchMode=yes",
             "-o", "IdentitiesOnly=yes",
             "-o", "StrictHostKeyChecking=yes",
-            "-o", "UserKnownHostsFile=\(knownHosts.path)",
+            "-o", "UserKnownHostsFile=\"\(knownHosts.path)\"",
             "-o", "GlobalKnownHostsFile=/dev/null",
             "-o", "ConnectTimeout=10",
             "-o", "ServerAliveInterval=5",
