@@ -14,7 +14,17 @@ Power and temperature history for the last hour, 24 hours, 7 days, or 30 days. R
 
 The desktop widget shows both Sparks. Shut Down signs in over SSH and switches the plug off only after the machine is confirmed down. If that check fails, the plug stays on.
 
-In Settings, a schedule can shut a Spark down when it has been idle inside a time window, and leave it off until you turn it on. A running job blocks that automatic shutdown. Temperature never shuts a machine down.
+## Schedule
+
+Each Spark has its own window in Settings → Schedule. The default is 23:00–07:00, and a window can run past midnight. Inside that window, the Spark shuts down only after it has been idle for the full idle time, 10 minutes unless you change it.
+
+Idle means the GPU is under 10%, `nvidia-smi` shows no compute process, and Docker shows no running container. A process or container that is still loaded, even with the GPU at 0%, keeps the machine on. The idle clock resets as soon as any of that comes back. Temperature never shuts a machine down.
+
+The automatic shutdown uses the same path as the button: SSH first, and the plug switches off only after the machine is confirmed down. A failed attempt waits 10 minutes and tries again. It never cuts power when SSH fails.
+
+Outside the window, the schedule does nothing on its own. **Keep off until turned on** is on by default, so the Spark stays off after the window ends until you press Turn On. If you turn that off, it switches the Spark on when the window ends, but only if the Spark was off during the window.
+
+Pressing Turn On during the window keeps that Spark on until the window ends. Allow Schedule clears that hold. Shut Down still works immediately, even while a job is running.
 
 ## Build
 
