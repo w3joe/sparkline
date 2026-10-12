@@ -118,5 +118,7 @@ struct CommandBusTests {
         )
         try snapshot.write(to: container)
         #expect(WidgetSnapshot.load(from: container) == snapshot)
+        #expect(snapshot.sparks[0].activity == .idle)
+        #expect(snapshot.sparks[0].jobName == nil)
     }
 }

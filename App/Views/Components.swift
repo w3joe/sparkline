@@ -69,12 +69,92 @@ struct StatusBadge: View {
     let status: ComputerStatus
 
     var body: some View {
-        Label(status.label, systemImage: status.symbol)
+        Badge(text: status.label, symbol: status.symbol, tint: status.color)
+    }
+}
+
+struct Badge: View {
+    let text: String
+    let symbol: String
+    let tint: Color
+
+    var body: some View {
+        Label(text, systemImage: symbol)
             .font(.caption.weight(.medium))
-            .foregroundStyle(status.color)
+            .foregroundStyle(tint)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(status.color.opacity(0.14), in: Capsule())
+            .background(tint.opacity(0.14), in: Capsule())
+            .contentTransition(.symbolEffect(.replace))
+    }
+}
+
+/// What a Spark is running, as shown on its card and in the menu.
+struct ActivityStyle {
+    let label: String
+    let symbol: String
+    let tint: Color
+
+    @MainActor
+    init(probe: SparkProbe, checked: Bool, status: ComputerStatus) {
+        if status == .off || status == .outletOff {
+            self.init("Powered off", "moon.zzz.fill", .secondary)
+        } else if !checked {
+            self.init("Checking…", "ellipsis.circle.fill", .secondary)
+        } else if !probe.reachable {
+            self.init("Unavailable", "questionmark.circle.fill", .secondary)
+        } else {
+            switch probe.workload.activity {
+            case .busy: self.init("Busy", "gearshape.2.fill", .blue)
+            case .loaded: self.init("Loaded", "tray.full.fill", .teal)
+            case .idle: self.init("Idle", "pause.circle.fill", .secondary)
+            }
+        }
+    }
+
+    private init(_ label: String, _ symbol: String, _ tint: Color) {
+        self.label = label
+        self.symbol = symbol
+        self.tint = tint
+    }
+}
+
+extension View {
+    /// A top-level dashboard section.
+    func card(padding: CGFloat = 18) -> some View {
+        self
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.separator.opacity(0.5)))
+    }
+
+    /// A grouped block inside a card.
+    func tile(padding: CGFloat = 12) -> some View {
+        self
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+struct SectionHeader: View {
+    let title: String
+    let symbol: String
+    var subtitle: String?
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: symbol)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.headline)
+                if let subtitle {
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 }
 

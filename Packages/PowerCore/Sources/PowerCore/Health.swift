@@ -42,17 +42,97 @@ public struct PortReading: Equatable, Sendable, Identifiable {
     }
 }
 
-/// One SSH probe of a Spark: temperatures, the ports we care about, and an optional ping.
+public struct GPUProcess: Equatable, Sendable, Identifiable {
+    public var pid: Int
+    public var name: String
+    public var command: String
+    public var memoryMiB: Int?
+    public var runningSeconds: Int?
+
+    public var id: Int { pid }
+
+    public init(pid: Int, name: String, command: String, memoryMiB: Int?, runningSeconds: Int?) {
+        self.pid = pid
+        self.name = name
+        self.command = command
+        self.memoryMiB = memoryMiB
+        self.runningSeconds = runningSeconds
+    }
+}
+
+public struct ContainerInfo: Equatable, Sendable, Identifiable {
+    public var name: String
+    public var image: String
+    public var status: String
+
+    public var id: String { name }
+
+    public init(name: String, image: String, status: String) {
+        self.name = name
+        self.image = image
+        self.status = status
+    }
+}
+
+/// What a Spark is doing: GPU use, the processes holding the GPU, and running containers.
+public struct Workload: Equatable, Sendable {
+    public enum Activity: Equatable, Sendable {
+        /// The GPU is doing real work.
+        case busy
+        /// Something holds the GPU or a container runs, but the GPU is quiet.
+        case loaded
+        case idle
+    }
+
+    public static let busyUtilization = 10
+
+    public var gpuUtilization: Int?
+    public var gpuWatts: Double?
+    public var memoryUsedGB: Double?
+    public var memoryTotalGB: Double?
+    public var processes: [GPUProcess]
+    public var containers: [ContainerInfo]
+
+    public init(
+        gpuUtilization: Int? = nil,
+        gpuWatts: Double? = nil,
+        memoryUsedGB: Double? = nil,
+        memoryTotalGB: Double? = nil,
+        processes: [GPUProcess] = [],
+        containers: [ContainerInfo] = []
+    ) {
+        self.gpuUtilization = gpuUtilization
+        self.gpuWatts = gpuWatts
+        self.memoryUsedGB = memoryUsedGB
+        self.memoryTotalGB = memoryTotalGB
+        self.processes = processes
+        self.containers = containers
+    }
+
+    public var activity: Activity {
+        if (gpuUtilization ?? 0) >= Self.busyUtilization { return .busy }
+        if !processes.isEmpty || !containers.isEmpty { return .loaded }
+        return .idle
+    }
+
+    public var runningCount: Int { processes.count + containers.count }
+}
+
+/// One SSH probe of a Spark: temperatures, work, the ports we care about, and an optional ping.
 public struct SparkProbe: Equatable, Sendable {
     public var thermal: ThermalReading
+    public var workload: Workload
     public var ports: [PortReading]
     public var pingMilliseconds: Double?
 
-    public init(thermal: ThermalReading, ports: [PortReading], pingMilliseconds: Double?) {
+    public init(thermal: ThermalReading, workload: Workload = Workload(), ports: [PortReading], pingMilliseconds: Double?) {
         self.thermal = thermal
+        self.workload = workload
         self.ports = ports
         self.pingMilliseconds = pingMilliseconds
     }
+
+    public var reachable: Bool { thermal.error == nil }
 
     public func port(_ name: String) -> PortReading? {
         ports.first { $0.name == name }
@@ -64,7 +144,28 @@ public enum ProbeParser {
     public static func parse(_ text: String, at date: Date = Date()) -> SparkProbe {
         var values: [String: String] = [:]
         var ports: [PortReading] = []
+        var processes: [GPUProcess] = []
+        var containers: [ContainerInfo] = []
         for raw in text.split(whereSeparator: \.isNewline) {
+            let fields = raw.split(separator: "\t", omittingEmptySubsequences: false).map {
+                $0.trimmingCharacters(in: .whitespaces)
+            }
+            if fields.first == "app" {
+                guard fields.count >= 5, let pid = Int(fields[1]), !fields[4].isEmpty else { continue }
+                processes.append(GPUProcess(
+                    pid: pid,
+                    name: fields[4],
+                    command: fields.count > 5 && !fields[5].isEmpty ? fields[5] : fields[4],
+                    memoryMiB: Int(fields[2]),
+                    runningSeconds: Int(fields[3])
+                ))
+                continue
+            }
+            if fields.first == "ctr" {
+                guard fields.count >= 4, !fields[1].isEmpty else { continue }
+                containers.append(ContainerInfo(name: fields[1], image: fields[2], status: fields[3]))
+                continue
+            }
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.hasPrefix("port ") {
                 let parts = line.split(separator: " ").map(String.init)
@@ -88,7 +189,17 @@ public enum ProbeParser {
             boardC: milli(values["board_mc"]),
             at: date
         )
-        return SparkProbe(thermal: thermal, ports: ports, pingMilliseconds: double(values["ping_ms"]))
+        let totalKB = double(values["mem_total_kb"])
+        let availableKB = double(values["mem_avail_kb"])
+        let workload = Workload(
+            gpuUtilization: double(values["gpu_util"]).map { Int($0.rounded()) },
+            gpuWatts: double(values["gpu_w"]),
+            memoryUsedGB: totalKB.flatMap { total in availableKB.map { (total - $0) / 1_048_576 } },
+            memoryTotalGB: totalKB.map { $0 / 1_048_576 },
+            processes: processes,
+            containers: containers
+        )
+        return SparkProbe(thermal: thermal, workload: workload, ports: ports, pingMilliseconds: double(values["ping_ms"]))
     }
 
     private static func double(_ text: String?) -> Double? {
@@ -209,5 +320,34 @@ public enum HealthFormat {
 
     public static func gigabits(_ value: Double) -> String {
         value >= 1 ? String(format: "%.1f Gb/s", value) : String(format: "%.0f Mb/s", value * 1000)
+    }
+
+    public static func percent(_ value: Int?) -> String {
+        guard let value else { return "–" }
+        return "\(value)%"
+    }
+
+    public static func gigabytes(_ used: Double?, of total: Double?) -> String {
+        switch (used, total) {
+        case let (used?, total?): return String(format: "%.0f / %.0f GB", used, total)
+        case let (used?, nil): return String(format: "%.0f GB", used)
+        default: return "–"
+        }
+    }
+
+    public static func memory(mebibytes: Int?) -> String {
+        guard let mebibytes else { return "–" }
+        return mebibytes >= 1024 ? String(format: "%.1f GB", Double(mebibytes) / 1024) : "\(mebibytes) MB"
+    }
+
+    public static func duration(seconds: Int?) -> String {
+        guard let seconds else { return "–" }
+        let minutes = seconds / 60
+        let hours = minutes / 60
+        let days = hours / 24
+        if days > 0 { return "\(days)d \(hours % 24)h" }
+        if hours > 0 { return "\(hours)h \(minutes % 60)m" }
+        if minutes > 0 { return "\(minutes)m" }
+        return "\(seconds)s"
     }
 }

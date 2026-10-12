@@ -34,7 +34,7 @@ struct GB10PowerMonitorApp: App {
             DashboardView()
                 .environment(model)
         }
-        .defaultSize(width: 940, height: 720)
+        .defaultSize(width: 980, height: 780)
         .windowToolbarStyle(.unified)
 
         Settings {

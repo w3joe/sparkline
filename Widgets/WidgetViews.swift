@@ -9,112 +9,80 @@ struct WidgetView: View {
     let entry: Entry
 
     var body: some View {
-        if let snapshot = entry.snapshot {
-            content(snapshot)
-        } else {
-            VStack(alignment: .leading, spacing: 6) {
-                Label("GB10 Power", systemImage: "bolt.fill")
-                    .font(.headline)
-                    .widgetAccentable()
-                Spacer()
-                Text("Open GB10 Power Monitor to start monitoring.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+        Group {
+            if let snapshot = entry.snapshot {
+                content(snapshot)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("GB10 Power", systemImage: "bolt.fill")
+                        .font(.headline)
+                        .widgetAccentable()
+                    Spacer()
+                    Text("Open GB10 Power Monitor to start monitoring.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .id(entry.snapshot?.generatedAt ?? entry.date)
     }
 
     @ViewBuilder
     private func content(_ snapshot: WidgetSnapshot) -> some View {
         let sparks = entry.choice.ids.compactMap(snapshot.spark)
         switch (family, sparks.count) {
-        case (.systemSmall, 1):
-            SingleSparkSmall(spark: sparks[0], entry: entry, snapshot: snapshot)
-        case (.systemSmall, _):
-            BothSparksSmall(sparks: sparks, entry: entry, snapshot: snapshot)
+        case (.systemLarge, 1):
+            SingleSparkLarge(spark: sparks[0], entry: entry, snapshot: snapshot)
+        case (.systemLarge, _):
+            BothSparksLarge(sparks: sparks, entry: entry, snapshot: snapshot)
         case (_, 1):
             SingleSparkMedium(spark: sparks[0], entry: entry, snapshot: snapshot)
         default:
-            HStack(spacing: 14) {
-                ForEach(Array(sparks.enumerated()), id: \.element.id) { index, spark in
-                    if index > 0 { Divider() }
-                    SparkColumn(spark: spark, entry: entry, snapshot: snapshot)
-                }
-            }
+            BothSparksMedium(sparks: sparks, entry: entry, snapshot: snapshot)
         }
     }
 }
 
-// MARK: Layouts
+// MARK: Square
 
-private struct SingleSparkSmall: View {
+private struct SingleSparkLarge: View {
     let spark: SparkSnapshot
     let entry: Entry
     let snapshot: WidgetSnapshot
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SparkHeader(spark: spark)
-            Spacer(minLength: 4)
-            Watts(watts: spark.watts, size: 34)
-            StatusLine(spark: spark, entry: entry, snapshot: snapshot)
-            Spacer(minLength: 8)
-            PrimaryAction(spark: spark, entry: entry)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-}
+        VStack(alignment: .leading, spacing: 10) {
+            SparkHeader(spark: spark, showsActivity: true)
+            Watts(watts: spark.watts, size: 44)
+            Text(spark.runningSummary)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
 
-private struct SingleSparkMedium: View {
-    let spark: SparkSnapshot
-    let entry: Entry
-    let snapshot: WidgetSnapshot
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 0) {
-                SparkHeader(spark: spark)
-                Spacer(minLength: 4)
-                Watts(watts: spark.watts, size: 34)
-                StatusLine(spark: spark, entry: entry, snapshot: snapshot)
-                Spacer(minLength: 8)
-                PrimaryAction(spark: spark, entry: entry)
+            HStack(spacing: 8) {
+                MiniStat(title: "GPU", value: WidgetFormat.percent(spark.gpuUtilization))
+                MiniStat(title: "Temp", value: WidgetFormat.celsius(spark.gpuCelsius))
+                MiniStat(title: "GPU draw", value: WidgetFormat.watts(spark.gpuWatts))
+                MiniStat(title: "Outlet", value: spark.outlet == .on ? "On" : spark.outlet == .off ? "Off" : "–")
             }
-            .frame(width: 136, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Last hour")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Sparkline(points: spark.sparkline, showsAxis: true)
+                    .frame(maxHeight: .infinity)
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-}
 
-private struct SparkColumn: View {
-    let spark: SparkSnapshot
-    let entry: Entry
-    let snapshot: WidgetSnapshot
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SparkHeader(spark: spark)
-            Spacer(minLength: 2)
-            Watts(watts: spark.watts, size: 26)
             StatusLine(spark: spark, entry: entry, snapshot: snapshot)
-            Sparkline(points: spark.sparkline, showsAxis: false)
-                .frame(height: 22)
-                .padding(.vertical, 4)
             PrimaryAction(spark: spark, entry: entry)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
-private struct BothSparksSmall: View {
+private struct BothSparksLarge: View {
     let sparks: [SparkSnapshot]
     let entry: Entry
     let snapshot: WidgetSnapshot
@@ -126,29 +94,113 @@ private struct BothSparksSmall: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
                 Label("GB10 Power", systemImage: "bolt.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
+                    .font(.headline)
+                    .widgetAccentable()
+                Spacer()
+                Watts(watts: total, size: 26)
             }
-            Watts(watts: total, size: 30)
-            Spacer(minLength: 6)
-            VStack(spacing: 6) {
+            VStack(spacing: 8) {
                 ForEach(sparks) { spark in
-                    HStack(spacing: 6) {
-                        StatusSymbol(status: spark.computer)
-                        Text(spark.name).font(.caption.weight(.medium)).lineLimit(1)
-                        Spacer(minLength: 4)
-                        Text(WidgetFormat.watts(spark.watts))
-                            .font(.caption.weight(.semibold))
-                            .monospacedDigit()
-                    }
+                    LargeSparkTile(spark: spark, entry: entry, snapshot: snapshot)
                 }
             }
-            Spacer(minLength: 6)
+            Spacer(minLength: 0)
             FooterLine(entry: entry, snapshot: snapshot)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct LargeSparkTile: View {
+    let spark: SparkSnapshot
+    let entry: Entry
+    let snapshot: WidgetSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                SparkHeader(spark: spark, showsActivity: true)
+                Spacer(minLength: 4)
+                Watts(watts: spark.watts, size: 24)
+            }
+            HStack(spacing: 10) {
+                MiniStat(title: "GPU", value: WidgetFormat.percent(spark.gpuUtilization))
+                MiniStat(title: "Temp", value: WidgetFormat.celsius(spark.gpuCelsius))
+                Text(spark.runningSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            Sparkline(points: spark.sparkline, showsAxis: false)
+                .frame(height: 28)
+            PrimaryAction(spark: spark, entry: entry)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct SingleSparkMedium: View {
+    let spark: SparkSnapshot
+    let entry: Entry
+    let snapshot: WidgetSnapshot
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                SparkHeader(spark: spark, showsActivity: true)
+                Watts(watts: spark.watts, size: 32)
+                Text(spark.runningSummary)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                HStack(spacing: 12) {
+                    MiniStat(title: "GPU", value: WidgetFormat.percent(spark.gpuUtilization))
+                    MiniStat(title: "Temp", value: WidgetFormat.celsius(spark.gpuCelsius))
+                }
+                Spacer(minLength: 4)
+                StatusLine(spark: spark, entry: entry, snapshot: snapshot)
+                PrimaryAction(spark: spark, entry: entry)
+            }
+            .frame(minWidth: 150)
+            Sparkline(points: spark.sparkline, showsAxis: true)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct BothSparksMedium: View {
+    let sparks: [SparkSnapshot]
+    let entry: Entry
+    let snapshot: WidgetSnapshot
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ForEach(Array(sparks.enumerated()), id: \.element.id) { index, spark in
+                if index > 0 { Divider() }
+                VStack(alignment: .leading, spacing: 4) {
+                    SparkHeader(spark: spark, showsActivity: true)
+                    Watts(watts: spark.watts, size: 26)
+                    Text(spark.runningSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    HStack(spacing: 10) {
+                        MiniStat(title: "GPU", value: WidgetFormat.percent(spark.gpuUtilization))
+                        MiniStat(title: "Temp", value: WidgetFormat.celsius(spark.gpuCelsius))
+                    }
+                    Sparkline(points: spark.sparkline, showsAxis: false)
+                        .frame(height: 22)
+                    Spacer(minLength: 0)
+                    PrimaryAction(spark: spark, entry: entry)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -158,6 +210,7 @@ private struct BothSparksSmall: View {
 
 private struct SparkHeader: View {
     let spark: SparkSnapshot
+    var showsActivity = false
 
     var body: some View {
         HStack(spacing: 5) {
@@ -165,7 +218,31 @@ private struct SparkHeader: View {
             Text(spark.name)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
+            if showsActivity {
+                Text(spark.activity.label)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(spark.activity.widgetColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(spark.activity.widgetColor.opacity(0.16), in: Capsule())
+            }
         }
+    }
+}
+
+private struct MiniStat: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -345,6 +422,16 @@ enum WidgetFormat {
         "\(number(value)) W"
     }
 
+    static func percent(_ value: Int?) -> String {
+        guard let value else { return "–" }
+        return "\(value)%"
+    }
+
+    static func celsius(_ value: Double?) -> String {
+        guard let value else { return "–" }
+        return String(format: "%.0f°", value)
+    }
+
     static func time(_ date: Date) -> String {
         date.formatted(date: .omitted, time: .shortened)
     }
@@ -370,6 +457,16 @@ extension ComputerStatus {
         case .outletOff: "powerplug.fill"
         case .shuttingDown: "power.circle.fill"
         case .unknown: "questionmark.circle.fill"
+        }
+    }
+}
+
+extension WorkActivity {
+    var widgetColor: Color {
+        switch self {
+        case .busy: .blue
+        case .loaded: .teal
+        case .idle: .secondary
         }
     }
 }

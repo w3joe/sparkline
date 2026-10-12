@@ -6,19 +6,41 @@ import WidgetKit
 struct GB10WidgetBundle: WidgetBundle {
     var body: some Widget {
         SparkPowerWidget()
+        SparkPowerSquareWidget()
     }
 }
 
 struct SparkPowerWidget: Widget {
     var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: "SparkPowerWidget", intent: SelectSparkIntent.self, provider: Provider()) { entry in
+        AppIntentConfiguration(kind: WidgetKind.current, intent: SelectSparkIntent.self, provider: Provider()) { entry in
             WidgetView(entry: entry)
                 .containerBackground(.fill.tertiary, for: .widget)
+                .id(entry.snapshot?.generatedAt)
         }
         .configurationDisplayName("GB10 Power")
-        .description("Power, status and controls for your DGX Sparks.")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        .description("Live power, GPU work, and controls for your DGX Sparks.")
+        .supportedFamilies(WidgetKind.families)
     }
+}
+
+/// Same widget under the kind used while the square size was being added, so that copy keeps updating too.
+struct SparkPowerSquareWidget: Widget {
+    var body: some WidgetConfiguration {
+        AppIntentConfiguration(kind: WidgetKind.square, intent: SelectSparkIntent.self, provider: Provider()) { entry in
+            WidgetView(entry: entry)
+                .containerBackground(.fill.tertiary, for: .widget)
+                .id(entry.snapshot?.generatedAt)
+        }
+        .configurationDisplayName("GB10 Power")
+        .description("Live power, GPU work, and controls for your DGX Sparks.")
+        .supportedFamilies(WidgetKind.families)
+    }
+}
+
+enum WidgetKind {
+    static let current = "SparkPowerWidget"
+    static let square = "SparkPowerSquare"
+    static let families: [WidgetFamily] = [.systemLarge, .systemMedium]
 }
 
 struct Entry: TimelineEntry {
@@ -68,8 +90,13 @@ struct Provider: AppIntentTimelineProvider {
         Entry(
             date: Date(), choice: .both,
             snapshot: WidgetSnapshot(generatedAt: Date(), monitoring: true, sparks: SparkID.allCases.map {
-                SparkSnapshot(id: $0, name: $0.defaultName, configured: true, outlet: .on, computer: .online,
-                              watts: 48, readingAt: Date(), error: nil, operation: nil, sparkline: [])
+                SparkSnapshot(
+                    id: $0, name: $0.defaultName, configured: true, outlet: .on, computer: .online,
+                    watts: 48, readingAt: Date(), error: nil, operation: nil,
+                    sparkline: (0..<12).map { SparkPoint(date: Date().addingTimeInterval(Double($0 - 11) * 300), watts: 40 + Double($0)) },
+                    gpuUtilization: 96, gpuCelsius: 71, gpuWatts: 51,
+                    activity: .busy, jobName: "dgpp-serve", jobCount: 1, containerCount: $0 == .a ? 1 : 0
+                )
             }, notice: nil),
             armedUntil: [:], notice: nil
         )
@@ -95,6 +122,6 @@ struct Provider: AppIntentTimelineProvider {
             next.date = change.addingTimeInterval(0.5)
             entries.append(next)
         }
-        return Timeline(entries: entries, policy: .after(now.addingTimeInterval(5 * 60)))
+        return Timeline(entries: entries, policy: .after(now.addingTimeInterval(15)))
     }
 }

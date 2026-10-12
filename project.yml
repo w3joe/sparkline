@@ -16,7 +16,7 @@ settings:
     ENABLE_HARDENED_RUNTIME: YES
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    CURRENT_PROJECT_VERSION: "3"
     APP_GROUP_ID: FZ26Z8W5FZ.com.w3joe.gb10power
     DEAD_CODE_STRIPPING: YES
 
@@ -46,6 +46,8 @@ targets:
         LSApplicationCategoryType: public.app-category.utilities
         NSLocalNetworkUsageDescription: GB10 Power Monitor reads and switches your Tapo P110 plugs and connects to your DGX Sparks over SSH on your local network.
         AppGroupIdentifier: $(APP_GROUP_ID)
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
     entitlements:
       path: App/GB10PowerMonitor.entitlements
       properties:
@@ -77,6 +79,8 @@ targets:
       path: Widgets/Info.plist
       properties:
         CFBundleDisplayName: GB10 Power
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
         AppGroupIdentifier: $(APP_GROUP_ID)

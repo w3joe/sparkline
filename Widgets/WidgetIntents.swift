@@ -36,7 +36,7 @@ enum SparkTarget: String, AppEnum {
 
 struct SelectSparkIntent: WidgetConfigurationIntent {
     static let title: LocalizedStringResource = "Choose Spark"
-    static let description = IntentDescription("Pick which DGX Spark the widget shows. Controls need a single Spark in the small size.")
+    static let description = IntentDescription("Pick which DGX Spark the widget shows.")
 
     @Parameter(title: "Spark", default: .both)
     var spark: SparkChoice

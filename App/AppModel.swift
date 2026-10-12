@@ -81,7 +81,10 @@ final class AppModel {
 
         let health = HealthMonitor(enabled: !simulate, onChange: {})
         self.health = health
-        health.onChange = { [weak self] in self?.healthRevision &+= 1 }
+        health.onChange = { [weak self] in
+            self?.healthRevision &+= 1
+            self?.schedulePublish()
+        }
 
         monitor = Monitor(plug: helper, probe: probe, store: store) { [weak self] state in
             Task { @MainActor in self?.apply(state) }
@@ -350,6 +353,16 @@ final class AppModel {
         let sparks = SparkID.allCases.map { id -> SparkSnapshot in
             let spark = config.spark(id)
             let state = state(id)
+            let probe = health.probe(id)
+            let poweredOff = state.computer == .off || state.computer == .outletOff
+            let activity: WorkActivity = {
+                if poweredOff || !probe.reachable { return .idle }
+                switch probe.workload.activity {
+                case .busy: return .busy
+                case .loaded: return .loaded
+                case .idle: return .idle
+                }
+            }()
             return SparkSnapshot(
                 id: id,
                 name: spark.name,
@@ -360,18 +373,28 @@ final class AppModel {
                 readingAt: state.lastReadingAt,
                 error: state.error?.summary,
                 operation: operations[id],
-                sparkline: ChartSeriesBuilder.sparkline(from: buckets, spark: id, end: now, span: 3_600, slots: 30)
+                sparkline: ChartSeriesBuilder.sparkline(from: buckets, spark: id, end: now, span: 3_600, slots: 30),
+                gpuUtilization: probe.workload.gpuUtilization,
+                gpuCelsius: probe.thermal.gpuC,
+                gpuWatts: probe.workload.gpuWatts,
+                activity: activity,
+                jobName: probe.workload.processes.first?.name ?? probe.workload.containers.first?.name,
+                jobCount: probe.workload.processes.count,
+                containerCount: probe.workload.containers.count
             )
         }
         let snapshot = WidgetSnapshot(generatedAt: now, monitoring: config.monitoringEnabled, sparks: sparks, notice: notice)
         try? snapshot.write(to: container)
 
-        let signature = sparks.map { "\($0.name)|\($0.configured)|\($0.outlet)|\($0.computer)|\($0.error ?? "")|\($0.operation ?? "")" }
+        let signature = sparks.map {
+            "\($0.name)|\($0.configured)|\($0.outlet)|\($0.computer)|\($0.error ?? "")|\($0.operation ?? "")|\($0.activity)|\($0.jobName ?? "")|\($0.gpuUtilization ?? -1)|\(Int(($0.watts ?? 0).rounded()))|\($0.gpuCelsius.map { Int($0) } ?? -1)"
+        }
             .joined(separator: ";") + "|\(notice?.at.timeIntervalSince1970 ?? 0)|\(config.monitoringEnabled)"
-        if force || signature != lastWidgetSignature || now.timeIntervalSince(lastWidgetReload) > 300 {
+        if force || signature != lastWidgetSignature {
             lastWidgetSignature = signature
             lastWidgetReload = now
-            WidgetCenter.shared.reloadAllTimelines()
+            WidgetCenter.shared.reloadTimelines(ofKind: "SparkPowerWidget")
+            WidgetCenter.shared.reloadTimelines(ofKind: "SparkPowerSquare")
         }
     }
 

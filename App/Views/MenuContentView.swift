@@ -49,7 +49,7 @@ struct MenuContentView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
         }
-        .frame(width: 360)
+        .frame(width: 380)
     }
 
     private var header: some View {
@@ -130,6 +130,8 @@ struct SparkMenuRow: View {
     var body: some View {
         let config = model.config.spark(id)
         let state = model.state(id)
+        let probe = model.health.probe(id)
+        let activity = ActivityStyle(probe: probe, checked: model.health.updatedAt != nil || model.simulate, status: state.computer)
 
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 10) {
@@ -137,12 +139,17 @@ struct SparkMenuRow: View {
                     .font(.title2)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(config.name).font(.headline)
-                    Text(detail(state, config: config))
+                    Text(detail(state, config: config, activity: activity, probe: probe))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
                 Spacer()
                 WattsText(watts: state.watts, size: 22)
+            }
+
+            if config.hasPlug {
+                Badge(text: activity.label, symbol: activity.symbol, tint: activity.tint)
             }
 
             if config.hasPlug, let error = state.error {
@@ -162,10 +169,18 @@ struct SparkMenuRow: View {
         .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    private func detail(_ state: SparkLiveState, config: SparkConfig) -> String {
+    private func detail(_ state: SparkLiveState, config: SparkConfig, activity: ActivityStyle, probe: SparkProbe) -> String {
         guard config.hasPlug else { return "Not set up" }
-        var parts = [state.computer.label]
-        if state.outlet != .unknown, state.computer != .outletOff { parts.append(state.outlet.label) }
+        var parts: [String] = []
+        if let name = probe.workload.processes.first?.name {
+            parts.append(name)
+            if let util = probe.workload.gpuUtilization { parts.append("GPU \(util)%") }
+        } else if !probe.workload.containers.isEmpty {
+            parts.append(probe.workload.containers[0].name)
+        } else if model.health.updatedAt != nil {
+            parts.append(activity.label)
+        }
+        parts.append(state.computer.label)
         if let at = state.lastReadingAt { parts.append(Format.time(at)) }
         return parts.joined(separator: " · ")
     }

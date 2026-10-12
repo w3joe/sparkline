@@ -12,7 +12,7 @@ struct DashboardView: View {
         ScrollView {
             content.padding(20)
         }
-        .frame(minWidth: 780, minHeight: 560)
+        .frame(minWidth: 860, minHeight: 620)
         .navigationTitle("GB10 Power")
         .navigationSubtitle(model.config.monitoringEnabled ? "Monitoring" : "Monitoring paused")
         .toolbar {
@@ -46,6 +46,7 @@ struct DashboardView: View {
             HStack(alignment: .top, spacing: 16) {
                 ForEach(SparkID.allCases) { SparkCard(id: $0) }
             }
+            .fixedSize(horizontal: false, vertical: true)
             LinksSection()
             PowerChartSection(range: range)
         }
@@ -59,15 +60,24 @@ struct SparkCard: View {
     var body: some View {
         let config = model.config.spark(id)
         let state = model.state(id)
+        let probe = model.health.probe(id)
+        let checked = model.health.updatedAt != nil || model.simulate
+        let activity = ActivityStyle(probe: probe, checked: checked, status: state.computer)
 
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .center, spacing: 8) {
                 Text(config.name).font(.title3.weight(.semibold))
                 Spacer()
+                Badge(text: activity.label, symbol: activity.symbol, tint: activity.tint)
                 StatusBadge(status: state.computer)
             }
 
-            WattsText(watts: state.watts, size: 40)
+            HStack(alignment: .lastTextBaseline, spacing: 28) {
+                WattsText(watts: state.watts, size: 42)
+                Metric(title: "GPU", value: HealthFormat.percent(probe.workload.gpuUtilization))
+                Metric(title: "GPU draw", value: Format.watts(probe.workload.gpuWatts))
+                Metric(title: "Memory", value: HealthFormat.gigabytes(probe.workload.memoryUsedGB, of: probe.workload.memoryTotalGB))
+            }
 
             HStack(spacing: 22) {
                 Metric(title: "Outlet", value: outlet(state.outlet))
@@ -76,7 +86,8 @@ struct SparkCard: View {
                 Metric(title: "Updated", value: Format.time(state.lastReadingAt))
             }
 
-            TemperatureRow(reading: model.health.thermals[id])
+            WorkloadSection(probe: probe, activity: activity, checked: checked)
+            TemperatureRow(reading: probe.thermal)
 
             if !config.hasPlug {
                 Text("No plug address set.").font(.callout).foregroundStyle(.secondary)
@@ -96,10 +107,7 @@ struct SparkCard: View {
                 SparkActions(id: id, style: .regular)
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 240, alignment: .topLeading)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.separator.opacity(0.6)))
+        .card()
     }
 
     private func outlet(_ state: OutletState) -> String {
@@ -111,17 +119,117 @@ struct SparkCard: View {
     }
 }
 
-struct TemperatureRow: View {
-    let reading: ThermalReading?
+struct WorkloadSection: View {
+    let probe: SparkProbe
+    let activity: ActivityStyle
+    let checked: Bool
 
     var body: some View {
-        HStack(spacing: 16) {
-            TempMetric(title: "GPU", celsius: reading?.gpuC)
-            TempMetric(title: "SSD", celsius: reading?.ssdC)
-            TempMetric(title: "NIC", celsius: reading?.nicC)
-            TempMetric(title: "Board", celsius: reading?.boardC)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "square.stack.3d.forward.dottedline.fill")
+                    .foregroundStyle(.secondary)
+                Text("Running").font(.subheadline.weight(.semibold))
+                Spacer()
+                if probe.workload.runningCount > 0 {
+                    Text(countLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if !checked {
+                Text("Checking what’s running…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else if !probe.reachable {
+                Text(probe.thermal.error ?? "Couldn’t reach this Spark.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            } else if probe.workload.runningCount == 0 {
+                Label("Idle — no GPU work or containers", systemImage: "pause.circle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(probe.workload.processes) { process in
+                        WorkRow(
+                            symbol: "cpu.fill",
+                            title: process.name,
+                            detail: [HealthFormat.memory(mebibytes: process.memoryMiB), HealthFormat.duration(seconds: process.runningSeconds)]
+                                .filter { $0 != "–" }
+                                .joined(separator: " · "),
+                            help: process.command
+                        )
+                    }
+                    ForEach(probe.workload.containers) { container in
+                        WorkRow(
+                            symbol: "shippingbox.fill",
+                            title: container.name,
+                            detail: [shortImage(container.image), container.status]
+                                .filter { !$0.isEmpty }
+                                .joined(separator: " · "),
+                            help: container.image
+                        )
+                    }
+                }
+            }
         }
-        .help(reading?.error ?? "Live temperatures")
+        .tile()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Running, \(activity.label)")
+    }
+
+    private var countLabel: String {
+        let jobs = probe.workload.processes.count
+        let boxes = probe.workload.containers.count
+        var parts: [String] = []
+        if jobs > 0 { parts.append(jobs == 1 ? "1 GPU job" : "\(jobs) GPU jobs") }
+        if boxes > 0 { parts.append(boxes == 1 ? "1 container" : "\(boxes) containers") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func shortImage(_ image: String) -> String {
+        image.split(separator: "/").last.map(String.init) ?? image
+    }
+}
+
+struct WorkRow: View {
+    let symbol: String
+    let title: String
+    let detail: String
+    let help: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: symbol)
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+            Text(title)
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Text(detail)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .help(help)
+    }
+}
+
+struct TemperatureRow: View {
+    let reading: ThermalReading
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TempMetric(title: "GPU", celsius: reading.gpuC)
+            TempMetric(title: "SSD", celsius: reading.ssdC)
+            TempMetric(title: "NIC", celsius: reading.nicC)
+            TempMetric(title: "Board", celsius: reading.boardC)
+        }
+        .help(reading.error ?? "Live temperatures")
     }
 }
 
@@ -133,9 +241,11 @@ struct TempMetric: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(HealthFormat.celsius(celsius))
-                .font(.callout.monospacedDigit())
+                .font(.body.weight(.medium).monospacedDigit())
                 .foregroundStyle(color)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .tile(padding: 10)
     }
 
     private var color: Color {
@@ -152,24 +262,12 @@ struct LinksSection: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let health = model.health
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Links").font(.title3.weight(.semibold))
-                Text(health.updatedAt.map { "Updated \(Format.time($0))" } ?? "Waiting for the first reading")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            if let error = health.error {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout).foregroundStyle(.orange).lineLimit(3)
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            SectionHeader(title: "Links", symbol: "cable.connector")
             LinkRow(kind: .tenGig)
             LinkRow(kind: .qsfp)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.separator.opacity(0.6)))
+        .card()
     }
 }
 
@@ -179,76 +277,33 @@ struct LinkRow: View {
 
     var body: some View {
         let health = model.health
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(kind.title).font(.headline)
-                    Text(kind.detail).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                status
+        let up = kind == .tenGig ? health.tenGigUp : health.qsfpUp
+        HStack(spacing: 12) {
+            Text(kind.title).font(.headline)
+            Badge(
+                text: up ? "Up" : "Down",
+                symbol: up ? "checkmark.circle.fill" : "xmark.circle.fill",
+                tint: up ? .green : .red
+            )
+            Spacer(minLength: 8)
+            if let result = health.speedResults[kind] {
+                Text(HealthFormat.gigabits(result.gigabitsPerSecond))
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            } else if let failure = health.testError[kind] {
+                Text(failure)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
             }
-            HStack(spacing: 22) {
-                metrics
+            if health.testing == kind {
+                ProgressView().controlSize(.small)
             }
-            if kind == .qsfp {
-                HStack(spacing: 16) {
-                    ForEach(HealthMonitor.qsfpPorts, id: \.self) { name in
-                        let one = health.spark1.port(name)
-                        let two = health.spark2.port(name)
-                        Text("\(name) \(portMark(one)) / \(portMark(two))")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            HStack {
-                if let result = health.speedResults[kind] {
-                    Text("Last test \(HealthFormat.gigabits(result.gigabitsPerSecond)) at \(Format.time(result.at))")
-                        .font(.callout).foregroundStyle(.secondary)
-                } else if let failure = health.testError[kind] {
-                    Text(failure).font(.callout).foregroundStyle(.orange).lineLimit(2)
-                }
-                Spacer()
-                if health.testing == kind {
-                    ProgressView().controlSize(.small)
-                }
-                Button("Test Max Speed") { health.testSpeed(kind) }
-                    .disabled(health.testing != nil)
-            }
+            Button("Test Max Speed") { health.testSpeed(kind) }
+                .controlSize(.small)
+                .disabled(health.testing != nil)
         }
-        .padding(12)
-        .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    @ViewBuilder
-    private var status: some View {
-        let up = kind == .tenGig ? model.health.tenGigUp : model.health.qsfpUp
-        Label(up ? "Up" : "Down", systemImage: up ? "checkmark.circle.fill" : "xmark.circle.fill")
-            .font(.caption.weight(.medium))
-            .foregroundStyle(up ? .green : .red)
-    }
-
-    @ViewBuilder
-    private var metrics: some View {
-        let health = model.health
-        switch kind {
-        case .tenGig:
-            Metric(title: "Speed", value: HealthFormat.megabits(health.localEthernet.megabitsPerSecond ?? health.spark1.port(HealthMonitor.tenGigPort)?.megabitsPerSecond))
-            Metric(title: "Ping", value: HealthFormat.ping(health.tenGigPing))
-            Metric(title: "Mac", value: health.localEthernet.address ?? "No address")
-            Metric(title: "Spark 1", value: HealthMonitor.sparkTenGigAddress)
-        case .qsfp:
-            let speed = HealthMonitor.qsfpPorts.compactMap { health.spark1.port($0)?.megabitsPerSecond }.max()
-            Metric(title: "Speed", value: HealthFormat.megabits(speed))
-            Metric(title: "Ping", value: HealthFormat.ping(health.spark1.pingMilliseconds))
-            Metric(title: "Path", value: "192.168.177.11 to .12")
-        }
-    }
-
-    private func portMark(_ port: PortReading?) -> String {
-        guard let port else { return "–" }
-        return port.up ? "up" : "down"
+        .tile(padding: 10)
     }
 }
 
@@ -304,10 +359,7 @@ struct PowerChartSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Power").font(.title3.weight(.semibold))
-                Text(rangeDescription).font(.callout).foregroundStyle(.secondary)
-            }
+            SectionHeader(title: "Power", symbol: "chart.xyaxis.line", subtitle: rangeDescription)
 
             if points.isEmpty {
                 ContentUnavailableView(
@@ -321,10 +373,7 @@ struct PowerChartSection: View {
                 stats
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.separator.opacity(0.6)))
+        .card()
         .task(id: "\(range.rawValue)-\(model.historyRevision / 2)") {
             load()
         }

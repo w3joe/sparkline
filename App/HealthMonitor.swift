@@ -52,6 +52,10 @@ final class HealthMonitor {
         loop = nil
     }
 
+    func probe(_ id: SparkID) -> SparkProbe {
+        id == .a ? spark1 : spark2
+    }
+
     var qsfpUp: Bool {
         Self.qsfpPorts.contains { name in
             (spark1.port(name)?.up ?? false) && (spark2.port(name)?.up ?? false)
@@ -175,8 +179,20 @@ final class HealthMonitor {
     // MARK: Commands
 
     private static let probeScript = """
-    gpu=$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d '[:space:]')
-    echo "gpu_c=$gpu"
+    IFS=, read -r t u w < <(nvidia-smi --query-gpu=temperature.gpu,utilization.gpu,power.draw --format=csv,noheader,nounits 2>/dev/null | head -1)
+    echo "gpu_c=${t// /}"
+    echo "gpu_util=${u// /}"
+    echo "gpu_w=${w// /}"
+    awk '/^MemTotal:/{print "mem_total_kb="$2} /^MemAvailable:/{print "mem_avail_kb="$2}' /proc/meminfo
+    nvidia-smi --query-compute-apps=pid,used_memory,process_name --format=csv,noheader,nounits 2>/dev/null |
+    while IFS=, read -r pid mem name; do
+      pid=${pid// /}; mem=${mem// /}; name=${name# }
+      [ -n "$pid" ] || continue
+      age=$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')
+      cmd=$(tr '\\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | cut -c1-300)
+      printf 'app\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$pid" "$mem" "$age" "${name##*/}" "$cmd"
+    done
+    timeout 5 docker ps --format '{{printf "ctr\t%s\t%s\t%s" .Names .Image .Status}}' 2>/dev/null
     ssd=; nic=; board=
     for h in /sys/class/hwmon/hwmon*; do
       name=$(cat "$h/name" 2>/dev/null || true)
@@ -208,7 +224,7 @@ final class HealthMonitor {
 
     private static func probe(sshConfig: String, host: String, ping: String?) async -> (probe: SparkProbe, error: String?) {
         let command = "bash -s -- \(ping ?? "")"
-        let result = await ssh(sshConfig, host, command, timeout: .seconds(20), input: Data(probeScript.utf8))
+        let result = await ssh(sshConfig, host, command, timeout: .seconds(25), input: Data(probeScript.utf8))
         if !result.succeeded && result.stdout.trimmed.isEmpty {
             let message = result.stderr.trimmed.isEmpty ? "Couldn't reach \(host)." : result.stderr.trimmed
             return (SparkProbe(thermal: ThermalReading(error: message), ports: [], pingMilliseconds: nil), message)
