@@ -228,15 +228,16 @@ struct SparkActions: View {
     let id: SparkID
     var style: Style = .regular
     @State private var confirmingShutdown = false
-    @State private var confirmingCycle = false
+    @State private var confirmingOutletOff = false
 
     var body: some View {
         let state = model.state(id)
         let config = model.config.spark(id)
         let busy = model.isBusy(id)
-        let canTurnOn = !busy && config.hasPlug && state.outlet != .on
-        let canShutDown = !busy && config.hasPlug && state.outlet != .off
-        let canCycle = !busy && state.outlet == .on && state.computer == .off
+        let sparkOffOutletOn = state.outlet == .on && state.computer == .off
+        let canTurnOn = !busy && config.hasPlug && (state.outlet != .on || sparkOffOutletOn)
+        let canShutDown = !busy && config.hasPlug && state.outlet != .off && !sparkOffOutletOn
+        let canSwitchOutletOff = !busy && config.hasPlug && sparkOffOutletOn
 
         Group {
             if style == .compact && confirmingShutdown {
@@ -257,23 +258,44 @@ struct SparkActions: View {
                     try? await Task.sleep(for: .seconds(10))
                     confirmingShutdown = false
                 }
+            } else if style == .compact && confirmingOutletOff {
+                HStack(spacing: 8) {
+                    Text("Switch \(config.name)'s outlet off?")
+                        .font(.callout.weight(.medium))
+                    Spacer(minLength: 0)
+                    Button("Cancel") { confirmingOutletOff = false }
+                        .keyboardShortcut(.cancelAction)
+                    Button("Outlet Off", role: .destructive) {
+                        confirmingOutletOff = false
+                        model.switchOutletOff(id)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                }
+                .task {
+                    try? await Task.sleep(for: .seconds(10))
+                    confirmingOutletOff = false
+                }
             } else {
                 HStack(spacing: 8) {
-                    if style == .regular && canCycle {
-                        Button("Power Cycle…", systemImage: "arrow.clockwise") { confirmingCycle = true }
-                            .help("Switch the outlet off and on so the Spark starts. Only allowed when it's confirmed off.")
+                    if sparkOffOutletOn {
+                        Button("Outlet Off…", systemImage: "powerplug") { confirmingOutletOff = true }
+                            .disabled(!canSwitchOutletOff)
+                            .help("Switch the outlet off now that the Spark is already shut down.")
                     }
                     Spacer(minLength: 0)
-                    if state.outlet != .off {
+                    if state.outlet != .off && !sparkOffOutletOn {
                         Button("Shut Down…", systemImage: "power") { confirmingShutdown = true }
                             .disabled(!canShutDown)
                             .help("Shut the Spark down over SSH, then switch its outlet off.")
                     }
-                    if state.outlet != .on {
+                    if state.outlet != .on || sparkOffOutletOn {
                         Button("Turn On", systemImage: "bolt.fill") { model.switchOn(id) }
                             .buttonStyle(.borderedProminent)
                             .disabled(!canTurnOn)
-                            .help("Switch the outlet on. The Spark starts when power is applied.")
+                            .help(sparkOffOutletOn
+                                  ? "Power cycle the outlet (45 s off) so the Spark starts."
+                                  : "Switch the outlet on. The Spark starts when power is applied.")
                     }
                 }
             }
@@ -288,11 +310,14 @@ struct SparkActions: View {
         } message: {
             Text("\(config.name) is asked to shut down over SSH. Its outlet is switched off only after it has powered down. If anything fails, the outlet stays on.")
         }
-        .confirmationDialog("Power cycle \(config.name)'s outlet?", isPresented: $confirmingCycle) {
-            Button("Power Cycle") { model.powerCycle(id) }
+        .confirmationDialog(
+            "Switch \(config.name)'s outlet off?",
+            isPresented: Binding(get: { style == .regular && confirmingOutletOff }, set: { confirmingOutletOff = $0 })
+        ) {
+            Button("Switch Outlet Off", role: .destructive) { model.switchOutletOff(id) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The outlet is switched off for 5 seconds and back on, so the Spark starts. This only happens if the Spark is confirmed off.")
+            Text("\(config.name) already looks shut down. Its outlet is switched off only after confirming power stays low with SSH closed.")
         }
     }
 }

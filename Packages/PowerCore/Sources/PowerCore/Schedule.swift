@@ -94,6 +94,7 @@ public struct QuietHours: Codable, Sendable, Equatable {
 public struct ScheduleSnapshot: Sendable, Equatable {
     public var now: Date
     public var outletOn: Bool
+    public var computerOff: Bool
     public var operationInProgress: Bool
     public var workloadKnown: Bool
     public var workloadRunning: Bool
@@ -106,6 +107,7 @@ public struct ScheduleSnapshot: Sendable, Equatable {
     public init(
         now: Date,
         outletOn: Bool,
+        computerOff: Bool = false,
         operationInProgress: Bool = false,
         workloadKnown: Bool,
         workloadRunning: Bool = false,
@@ -116,6 +118,7 @@ public struct ScheduleSnapshot: Sendable, Equatable {
     ) {
         self.now = now
         self.outletOn = outletOn
+        self.computerOff = computerOff
         self.operationInProgress = operationInProgress
         self.workloadKnown = workloadKnown
         self.workloadRunning = workloadRunning
@@ -148,7 +151,7 @@ public enum QuietHoursEvaluator {
     ) -> ScheduleDecision {
         guard hours.enabled else { return .inactive }
         guard hours.contains(snapshot.now, calendar: calendar) else {
-            guard !hours.stayOff, snapshot.pendingWake, !snapshot.outletOn else { return .outsideWindow }
+            guard !hours.stayOff, snapshot.pendingWake, (!snapshot.outletOn || snapshot.computerOff) else { return .outsideWindow }
             if snapshot.operationInProgress { return .inProgress }
             if let retry = snapshot.retryAfter, retry > snapshot.now { return .retryAfter(retry) }
             return .turnOn

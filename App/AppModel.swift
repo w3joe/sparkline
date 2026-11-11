@@ -206,7 +206,13 @@ final class AppModel {
     // MARK: Monitor updates
 
     private func apply(_ state: SparkLiveState) {
+        let previousOutlet = states[state.id]?.outlet
         states[state.id] = state
+        if previousOutlet != state.outlet, (previousOutlet == .on && state.outlet == .off) || state.outlet == .on {
+            let id = state.id
+            let outlet = state.outlet
+            Task { await controller.noteOutletState(id, outlet: outlet) }
+        }
         historyRevision &+= 1
         schedulePublish()
         evaluateSchedules()
@@ -299,15 +305,18 @@ final class AppModel {
             }
             let state = state(id)
             let probe = health.probe(id)
-            let known = health.updatedAt != nil && probe.reachable && probe.thermal.gpuC != nil
-            let running = known && probe.workload.activity != .idle
+            let alreadyOff = state.outlet == .on && state.computer == .off
+            let known = alreadyOff || (health.updatedAt != nil && probe.reachable && probe.thermal.gpuC != nil)
+            let running = !alreadyOff && known && probe.workload.activity != .idle
             let held = (schedule.holdUntil ?? .distantPast) > now
             if schedule.stayOff {
                 if schedule.pendingWake {
                     schedule.pendingWake = false
                     saveSchedule(id, schedule, evaluate: false)
                 }
-            } else if schedule.enabled && schedule.contains(now) && state.outlet != .on && !schedule.pendingWake {
+            } else if schedule.enabled && schedule.contains(now) && !isBusy(id)
+                && (state.outlet != .on || alreadyOff) && !schedule.pendingWake
+            {
                 schedule.pendingWake = true
                 saveSchedule(id, schedule, evaluate: false)
             }
@@ -323,6 +332,7 @@ final class AppModel {
                 ScheduleSnapshot(
                     now: now,
                     outletOn: state.outlet == .on,
+                    computerOff: alreadyOff,
                     operationInProgress: isBusy(id),
                     workloadKnown: known,
                     workloadRunning: running,
@@ -336,7 +346,11 @@ final class AppModel {
             switch decision {
             case .shutDown:
                 idleSince[id] = nil
-                shutDown(id, automatic: true)
+                if alreadyOff {
+                    switchOutletOff(id, automatic: true)
+                } else {
+                    shutDown(id, automatic: true)
+                }
             case .turnOn:
                 switchOn(id, automatic: true)
             default:
@@ -425,6 +439,15 @@ final class AppModel {
     func shutDown(_ id: SparkID, automatic: Bool = false) {
         run(id, overlay: .shuttingDown, initial: "Shutting down…", automatic: automatic) { controller, config, progress in
             await controller.shutDown(config, progress: progress)
+        } completion: { [weak self] outcome, _ in
+            guard let self, self.automaticShutdown.remove(id) != nil else { return }
+            self.scheduleRetryAfter[id] = outcome.success ? nil : Date().addingTimeInterval(10 * 60)
+        }
+    }
+
+    func switchOutletOff(_ id: SparkID, automatic: Bool = false) {
+        run(id, overlay: nil, initial: "Switching outlet off…", automatic: automatic) { controller, config, progress in
+            await controller.switchOutletOff(config, confirmFullWindow: automatic, progress: progress)
         } completion: { [weak self] outcome, _ in
             guard let self, self.automaticShutdown.remove(id) != nil else { return }
             self.scheduleRetryAfter[id] = outcome.success ? nil : Date().addingTimeInterval(10 * 60)

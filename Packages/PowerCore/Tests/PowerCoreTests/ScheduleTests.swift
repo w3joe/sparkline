@@ -105,6 +105,11 @@ struct ScheduleTests {
             ScheduleSnapshot(now: morning, outletOn: true, workloadKnown: true, pendingWake: true),
             calendar: calendar
         ) == .outsideWindow)
+        #expect(QuietHoursEvaluator.decide(
+            hours,
+            ScheduleSnapshot(now: morning, outletOn: true, computerOff: true, workloadKnown: true, pendingWake: true),
+            calendar: calendar
+        ) == .turnOn)
 
         let night = date(hour: 23, minute: 30)
         #expect(QuietHoursEvaluator.decide(

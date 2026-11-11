@@ -345,7 +345,7 @@ private struct PrimaryAction: View {
                     }
                     .accessibilityLabel("Cancel")
                 }
-            } else if spark.outlet == .off {
+            } else if spark.outlet == .off || spark.computer == .off {
                 Button(intent: SwitchOnIntent(spark.id)) {
                     label("Turn On", "bolt.fill")
                 }

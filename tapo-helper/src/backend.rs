@@ -127,8 +127,7 @@ impl RealBackend {
                 Err(e) => {
                     *session = None;
                     let error = classify(&e);
-                    let network = matches!(error.kind, ErrorKind::Unreachable | ErrorKind::Timeout);
-                    if fresh || network {
+                    if fresh || error.kind == ErrorKind::Timeout {
                         return Err(error);
                     }
                 }
@@ -160,7 +159,13 @@ impl RealBackend {
             Ok(())
         })
         .await?;
-        self.read(plug, ip).await
+        match self.read(plug, ip).await {
+            Ok(reading) => Ok(reading),
+            Err(_) => {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                self.read(plug, ip).await
+            }
+        }
     }
 
     async fn info(&self, plug: &str, ip: &str) -> Result<PlugInfo, HelperError> {

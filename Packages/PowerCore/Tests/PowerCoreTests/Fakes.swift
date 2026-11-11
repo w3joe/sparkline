@@ -31,14 +31,29 @@ actor FakePlug: PlugClient {
     var readFails: @Sendable (Date) -> Bool = { _ in false }
     var readError = PlugError(.unreachable, "simulated outage")
     var setFails = false
+    /// When set, simulates a power brick that stays in standby draw unless the outlet stayed off
+    /// for at least `requiredSeconds` before switching back on.
+    var dischargeRequirement: (requiredSeconds: TimeInterval, standbyWatts: Double, runningWatts: Double)?
+    private var switchedOffAt: Date?
+    private var bootedByDischarge = false
     private(set) var setCalls: [Bool] = []
+    private(set) var offDurations: [TimeInterval] = []
     private(set) var readCount = 0
     private(set) var resetCount = 0
 
-    init(clock: VirtualClock, on: Bool = true, watts: @escaping @Sendable (Date) -> Double = { _ in 60 }) {
+    init(
+        clock: VirtualClock,
+        on: Bool = true,
+        watts: @escaping @Sendable (Date) -> Double = { _ in 60 },
+        dischargeRequirement: (requiredSeconds: TimeInterval, standbyWatts: Double, runningWatts: Double)? = nil
+    ) {
         self.clock = clock
         self.on = on
         self.watts = watts
+        self.dischargeRequirement = dischargeRequirement
+        if !on {
+            self.switchedOffAt = .distantPast
+        }
     }
 
     func setWatts(_ f: @escaping @Sendable (Date) -> Double) { watts = f }
@@ -47,7 +62,16 @@ actor FakePlug: PlugClient {
     func setSetFails(_ v: Bool) { setFails = v }
 
     private func reading() -> PlugReading {
-        PlugReading(deviceOn: on, powerMilliwatts: on ? Int(watts(clock.now) * 1000) : 0, todayWh: 100, monthWh: 1000)
+        guard on else {
+            return PlugReading(deviceOn: false, powerMilliwatts: 0, todayWh: 100, monthWh: 1000)
+        }
+        let currentWatts: Double
+        if let req = dischargeRequirement {
+            currentWatts = bootedByDischarge ? req.runningWatts : req.standbyWatts
+        } else {
+            currentWatts = watts(clock.now)
+        }
+        return PlugReading(deviceOn: true, powerMilliwatts: Int(currentWatts * 1000), todayWh: 100, monthWh: 1000)
     }
 
     func configure(_ credentials: TapoCredentials) async throws {}
@@ -61,6 +85,20 @@ actor FakePlug: PlugClient {
     func set(_ spark: SparkID, ip: String, on: Bool) async throws -> PlugReading {
         setCalls.append(on)
         if setFails { throw PlugError(.timeout, "simulated set failure") }
+        let now = clock.now
+        if on {
+            if let offAt = switchedOffAt {
+                let offFor = now.timeIntervalSince(offAt)
+                offDurations.append(offFor)
+                if let req = dischargeRequirement {
+                    bootedByDischarge = offFor >= req.requiredSeconds
+                }
+            }
+            switchedOffAt = nil
+        } else {
+            switchedOffAt = now
+            bootedByDischarge = false
+        }
         self.on = on
         return reading()
     }

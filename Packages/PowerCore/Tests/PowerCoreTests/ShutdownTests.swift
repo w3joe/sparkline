@@ -183,12 +183,16 @@ struct SwitchOnTests {
         #expect(await plug.setCalls.isEmpty)
     }
 
-    @Test func onOutletWithOffSparkSuggestsPowerCycle() async {
-        let plug = FakePlug(clock: clock, on: true, watts: { _ in 1.5 })
+    @Test func onOutletWithOffSparkPowerCyclesWithDischargeDelayAndBoots() async {
+        let plug = FakePlug(
+            clock: clock,
+            on: true,
+            dischargeRequirement: (requiredSeconds: 35, standbyWatts: 1.1, runningWatts: 52)
+        )
         let outcome = await controller(plug, open: false).switchOn(testSpark())
-        #expect(!outcome.success)
-        #expect(outcome.message.contains("Power cycle"))
-        #expect(await plug.setCalls.isEmpty)
+        #expect(outcome.success, "\(outcome.message)")
+        #expect(await plug.setCalls == [false, true])
+        #expect(await plug.offDurations.first ?? 0 >= 45)
     }
 
     @Test func powerCycleRefusesARunningSpark() async {
@@ -205,10 +209,78 @@ struct SwitchOnTests {
         #expect(await plug.setCalls.isEmpty)
     }
 
-    @Test func powerCycleSwitchesOffThenOnForAnOffSpark() async {
-        let plug = FakePlug(clock: clock, on: true, watts: { _ in 1 })
+    @Test func powerCycleSwitchesOffForFullDischargeThenOnForAnOffSpark() async {
+        let plug = FakePlug(
+            clock: clock,
+            on: true,
+            dischargeRequirement: (requiredSeconds: 35, standbyWatts: 1.1, runningWatts: 50)
+        )
         let outcome = await controller(plug, open: false).powerCycle(testSpark())
-        #expect(outcome.success)
+        #expect(outcome.success, "\(outcome.message)")
         #expect(await plug.setCalls == [false, true])
+        #expect(await plug.offDurations.first ?? 0 >= 45)
+    }
+
+    @Test func stubbornBrickRetriesWithLonger60SecondDischargeAndBoots() async {
+        // Requires 55 s off to discharge: 45 s first cycle stays at 1.1 W, 60 s retry boots it.
+        let plug = FakePlug(
+            clock: clock,
+            on: true,
+            dischargeRequirement: (requiredSeconds: 55, standbyWatts: 1.1, runningWatts: 50)
+        )
+        let outcome = await controller(plug, open: false).powerCycle(testSpark())
+        #expect(outcome.success, "\(outcome.message)")
+        #expect(await plug.setCalls == [false, true, false, true])
+        let durations = await plug.offDurations
+        #expect(durations.count == 2)
+        #expect(durations[0] >= 45 && durations[0] < 55)
+        #expect(durations[1] >= 60)
+    }
+
+    @Test func sparkStuckInStandbyAfterRetryLeavesOutletOffAndReportsFailure() async {
+        let plug = FakePlug(clock: clock, on: true, watts: { _ in 1.1 })
+        let outcome = await controller(plug, open: false).powerCycle(testSpark())
+        #expect(!outcome.success)
+        #expect(outcome.message.contains("stayed in standby"))
+        #expect(await plug.setCalls == [false, true, false, true, false])
+        #expect(await !plug.on)
+    }
+
+    @Test func quickSwitchOnAfterShutdownWaitsForRemainingDischarge() async {
+        let t0 = clock.now
+        let plug = FakePlug(clock: clock, on: true) { date in
+            date.timeIntervalSince(t0) < 10 ? 60 : 1.1
+        }
+        let ctrl = PowerController(
+            plug: plug,
+            shell: FakeShell(),
+            probe: FakeProbe(clock: clock, open: { $0.timeIntervalSince(t0) < 5 }),
+            time: clock.source
+        )
+        let down = await ctrl.shutDown(testSpark())
+        #expect(down.success)
+        let offAt = clock.now
+
+        // User clicks Turn On just 10 s after shutdown completed; brick returns 50 W once turned on.
+        clock.advance(10)
+        await plug.setWatts { _ in 50 }
+        let up = await ctrl.switchOn(testSpark())
+        #expect(up.success, "\(up.message)")
+        #expect(clock.now.timeIntervalSince(offAt) >= 45)
+        #expect(await plug.offDurations.last ?? 0 >= 45)
+    }
+
+    @Test func switchOutletOffConfirmsLowWattsAndNeverCutsPowerWhenHigh() async {
+        let highPlug = FakePlug(clock: clock, on: true, watts: { _ in 40 })
+        let refused = await controller(highPlug, open: false).switchOutletOff(testSpark(), confirmFullWindow: true)
+        #expect(!refused.success)
+        #expect(await highPlug.setCalls.isEmpty)
+
+        let lowPlug = FakePlug(clock: clock, on: true, watts: { _ in 1.1 })
+        let start = clock.now
+        let ok = await controller(lowPlug, open: false).switchOutletOff(testSpark(), confirmFullWindow: true)
+        #expect(ok.success, "\(ok.message)")
+        #expect(clock.now.timeIntervalSince(start) >= 30)
+        #expect(await lowPlug.setCalls == [false])
     }
 }
